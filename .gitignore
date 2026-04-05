@@ -37,3 +37,7 @@ plan.md
 
 # Build outputs
 *.bak
+.worktrees/
+
+# Scripts
+scripts/
