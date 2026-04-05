@@ -20,7 +20,13 @@ TERMINAL_JSON=$(bash "$SCRIPT_DIR/registry.sh" 2>/dev/null)
 [ -z "$TERMINAL_JSON" ] && TERMINAL_JSON='{"kind":"unknown","focus_id":"'$$'","outer_id":"","label":"Terminal"}'
 
 # Input detection patterns (ERE)
+# Generic prompts
 INPUT_PAT='\? $|\? .*\[|\[y/n\]|\[Y/n\]|\[yes/no\]|password:|Password:|passphrase:|Passphrase:|Enter to|Press .* to|Overwrite\?|Continue\?|Confirm\?|Proceed\?|Are you sure'
+# Claude Code specific: permission prompts, tool approval
+INPUT_PAT="$INPUT_PAT|Allow |Deny |approve|Yes, allow|No, deny|Do you want to|permission"
+# Codex specific (future-proof)
+INPUT_PAT="$INPUT_PAT|APPROVE|DENY|approve changes"
+# User-supplied extra patterns
 [ -n "${INPUT_EXTRA:-}" ] && INPUT_PAT="$INPUT_PAT|$INPUT_EXTRA"
 
 # JSON-encode a string value (proper escaping of \, ", control chars)

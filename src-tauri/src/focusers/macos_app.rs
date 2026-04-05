@@ -1,7 +1,8 @@
 /// Activates a macOS terminal window using AppleScript.
 /// `focus_id` is the application name (e.g. "iTerm2", "Terminal").
+/// `outer_id` is the TTY name (e.g. "ttys000") for tab-specific focus.
 
-pub fn focus(focus_id: &str, _outer_id: &str) -> Result<(), String> {
+pub fn focus(focus_id: &str, outer_id: &str) -> Result<(), String> {
     if focus_id.is_empty() {
         return Ok(());
     }
@@ -10,17 +11,57 @@ pub fn focus(focus_id: &str, _outer_id: &str) -> Result<(), String> {
     {
         use super::os_helpers::spawn_silent;
 
-        // Activate the application by name via AppleScript
-        let script = format!(
-            "tell application \"{}\" to activate",
-            focus_id.replace('\\', "\\\\").replace('"', "\\\"")
-        );
+        // If we have a TTY, try tab-specific focus via terminal's AppleScript API
+        if !outer_id.is_empty() {
+            let script = match focus_id {
+                "iTerm2" => Some(format!(
+                    r#"tell application "iTerm2"
+                        activate
+                        repeat with w in windows
+                            repeat with t in tabs of w
+                                repeat with s in sessions of t
+                                    if tty of s contains "{}" then
+                                        select s
+                                        return
+                                    end if
+                                end repeat
+                            end repeat
+                        end repeat
+                    end tell"#,
+                    outer_id
+                )),
+                "Terminal" => Some(format!(
+                    r#"tell application "Terminal"
+                        activate
+                        repeat with w in windows
+                            repeat with t in tabs of w
+                                if tty of t contains "{}" then
+                                    set selected tab of w to t
+                                    set index of w to 1
+                                    return
+                                end if
+                            end repeat
+                        end repeat
+                    end tell"#,
+                    outer_id
+                )),
+                _ => None,
+            };
+
+            if let Some(script) = script {
+                return spawn_silent("osascript", &["-e", &script]);
+            }
+        }
+
+        // Fallback: just activate the app
+        let app = focus_id.replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!("tell application \"{}\" to activate", app);
         spawn_silent("osascript", &["-e", &script])?;
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = focus_id;
+        let _ = (focus_id, outer_id);
         log::debug!("macos_app focus is only supported on macOS");
     }
 

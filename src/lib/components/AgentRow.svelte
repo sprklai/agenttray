@@ -27,9 +27,15 @@
   </div>
 
   <div class="flex flex-col items-end gap-[3px] flex-shrink-0">
-    <span class="text-[10px] text-[#8a8880] opacity-60 max-w-[100px] truncate text-right" title={agent.terminal?.window_title ?? agent.terminal?.label ?? ''}>
-      {agent.terminal?.window_title ?? agent.terminal?.label ?? ''}
-    </span>
+    {#if agent.cpu != null && agent.cpu > 0}
+      <span class="text-[10px] font-mono text-[#8a8880] opacity-80 tabular-nums">
+        {agent.cpu.toFixed(0)}% CPU
+      </span>
+    {:else}
+      <span class="text-[10px] text-[#8a8880] opacity-60 max-w-[100px] truncate text-right" title={agent.terminal?.window_title ?? agent.terminal?.label ?? ''}>
+        {agent.terminal?.window_title ?? agent.terminal?.label ?? ''}
+      </span>
+    {/if}
     {#if agent.can_focus}
       <button
         type="button"

@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AgentTray",
   "version": "0.1.1",
-  "identifier": "com.agenttray.app",
+  "identifier": "com.sprklai.agenttray",
   "build": {
     "frontendDist": "../build",
     "devUrl": "http://localhost:5173",

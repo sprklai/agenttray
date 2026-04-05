@@ -2,15 +2,33 @@ use std::path::PathBuf;
 
 use crate::watcher::TerminalInfo;
 use super::{known_terminal, ProcInfo, WindowCache};
+use super::strategies::CliStrategy;
 
-pub fn find_cli_processes() -> Vec<ProcInfo> {
+/// Find CLI processes matching any registered strategy.
+pub fn find_cli_processes<'a>(
+    strategies: &'a [Box<dyn CliStrategy>],
+) -> Vec<(ProcInfo, &'a dyn CliStrategy)> {
+    // Build wmic filter for all strategy process names
+    let all_names: Vec<&str> = strategies.iter()
+        .flat_map(|s| s.process_names().iter().copied())
+        .collect();
+    if all_names.is_empty() {
+        return Vec::new();
+    }
+
+    // Query all potential agent processes in one wmic call
+    let name_filter = all_names.iter()
+        .map(|n| format!("name='{}.exe'", n))
+        .collect::<Vec<_>>()
+        .join(" or ");
+
     let output = match std::process::Command::new("wmic")
         .args([
             "process",
             "where",
-            "name='claude.exe'",
+            &name_filter,
             "get",
-            "ProcessId,ParentProcessId,CommandLine",
+            "ProcessId,ParentProcessId,CommandLine,Name",
             "/FORMAT:CSV",
         ])
         .output()
@@ -24,21 +42,30 @@ pub fn find_cli_processes() -> Vec<ProcInfo> {
 
     for line in stdout.lines().skip(1) {
         let cols: Vec<&str> = line.split(',').collect();
-        // CSV format: Node,CommandLine,ParentProcessId,ProcessId
-        if cols.len() < 4 {
+        // CSV format: Node,CommandLine,Name,ParentProcessId,ProcessId
+        if cols.len() < 5 {
             continue;
         }
 
         let cmd_line = cols[1];
-        if cmd_line.contains("mcp-server") || cmd_line.contains("worker-service") {
+        let proc_name = cols[2].trim().strip_suffix(".exe").unwrap_or(cols[2].trim());
+
+        let strategy = match strategies.iter().find(|s| {
+            s.process_names().iter().any(|n| *n == proc_name)
+        }) {
+            Some(s) => s.as_ref(),
+            None => continue,
+        };
+
+        if strategy.excluded_substrings().iter().any(|exc| cmd_line.contains(exc)) {
             continue;
         }
 
-        let pid: u32 = match cols[3].trim().parse() {
+        let pid: u32 = match cols[4].trim().parse() {
             Ok(p) => p,
             Err(_) => continue,
         };
-        let ppid: u32 = cols[2].trim().parse().unwrap_or(0);
+        let ppid: u32 = cols[3].trim().parse().unwrap_or(0);
 
         // CWD is hard to get on Windows without elevated privileges
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("C:\\"));
@@ -46,7 +73,7 @@ pub fn find_cli_processes() -> Vec<ProcInfo> {
         // Get CPU times (100-nanosecond units) via wmic
         let (utime, stime) = wmic_cpu_times(pid);
 
-        out.push(ProcInfo {
+        out.push((ProcInfo {
             pid,
             ppid,
             cwd,
@@ -54,7 +81,9 @@ pub fn find_cli_processes() -> Vec<ProcInfo> {
             utime,
             stime,
             instant_cpu: None,
-        });
+            window_title: None,
+            last_active: None,
+        }, strategy));
     }
 
     out

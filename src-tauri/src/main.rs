@@ -2,6 +2,7 @@
 
 mod focus;
 mod focusers;
+mod notifier;
 mod scanner;
 mod tray;
 mod watcher;
@@ -29,6 +30,7 @@ fn main() {
             // Spawn watcher on a dedicated OS thread (blocking loop)
             let h_watch = handle.clone();
             std::thread::spawn(move || watcher::watch(h_watch));
+
 
             // Build tray menu (required for AppIndicator on GNOME to show icon;
             // GNOME AppIndicator does NOT support direct click events — only menu)

@@ -2,8 +2,13 @@ use std::path::{Path, PathBuf};
 
 use crate::watcher::TerminalInfo;
 use super::{known_terminal, ProcInfo, WindowCache};
+use super::strategies::CliStrategy;
 
-pub fn find_cli_processes() -> Vec<ProcInfo> {
+/// Find CLI processes matching any registered strategy.
+/// Returns each process paired with a reference to the strategy that matched it.
+pub fn find_cli_processes<'a>(
+    strategies: &'a [Box<dyn CliStrategy>],
+) -> Vec<(ProcInfo, &'a dyn CliStrategy)> {
     let mut out = Vec::new();
     let proc_dir = match std::fs::read_dir("/proc") {
         Ok(d) => d,
@@ -32,12 +37,17 @@ pub fn find_cli_processes() -> Vec<ProcInfo> {
             .and_then(|n| n.to_str())
             .unwrap_or("");
 
-        if exe_name != "claude" {
-            continue;
-        }
+        // Match against registered strategies
+        let strategy = match strategies.iter().find(|s| {
+            s.process_names().iter().any(|n| *n == exe_name)
+        }) {
+            Some(s) => s.as_ref(),
+            None => continue,
+        };
 
+        // Check exclusions
         let full = String::from_utf8_lossy(&cmdline);
-        if full.contains("mcp-server") || full.contains("worker-service") {
+        if strategy.excluded_substrings().iter().any(|exc| full.contains(exc)) {
             continue;
         }
 
@@ -76,7 +86,7 @@ pub fn find_cli_processes() -> Vec<ProcInfo> {
             .unwrap_or(&tty_path)
             .to_string();
 
-        out.push(ProcInfo {
+        out.push((ProcInfo {
             pid,
             ppid,
             cwd,
@@ -84,7 +94,9 @@ pub fn find_cli_processes() -> Vec<ProcInfo> {
             utime,
             stime,
             instant_cpu: None,
-        });
+            window_title: None,
+            last_active: None,
+        }, strategy));
     }
 
     out
@@ -99,7 +111,10 @@ pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalIn
         if cur <= 1 {
             break;
         }
-        let cmdline = std::fs::read_to_string(format!("/proc/{}/cmdline", cur)).ok()?;
+        let cmdline = match std::fs::read_to_string(format!("/proc/{}/cmdline", cur)) {
+            Ok(s) => s,
+            Err(_) => break,
+        };
         let exe = cmdline.split('\0').next().unwrap_or("");
         let exe_name = Path::new(exe)
             .file_name()
@@ -112,11 +127,17 @@ pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalIn
             break;
         }
 
-        // Go up
-        let stat = std::fs::read_to_string(format!("/proc/{}/stat", cur)).ok()?;
-        let close = stat.rfind(')')?;
-        let fields: Vec<&str> = stat[close + 2..].split_whitespace().collect();
-        cur = fields.get(1)?.parse().ok()?;
+        // Go up — break instead of bail if parent is unreadable
+        let next_pid = (|| -> Option<u32> {
+            let stat = std::fs::read_to_string(format!("/proc/{}/stat", cur)).ok()?;
+            let close = stat.rfind(')')?;
+            let fields: Vec<&str> = stat[close + 2..].split_whitespace().collect();
+            fields.get(1)?.parse().ok()
+        })();
+        match next_pid {
+            Some(p) => cur = p,
+            None => break,
+        }
     }
 
     if term_pid == 0 {
@@ -136,7 +157,7 @@ pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalIn
     let focus_id = if has_display {
         cache
             .entry(term_pid)
-            .or_insert_with(|| xdotool_search_pid(term_pid))
+            .or_insert_with(|| find_window_for_pid(term_pid))
             .clone()
             .unwrap_or_default()
     } else {
@@ -165,6 +186,37 @@ fn xdotool_get_name(wid_hex: &str) -> Option<String> {
         .ok()?;
     let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if name.is_empty() { None } else { Some(name) }
+}
+
+/// Search for an X11 window owned by `start_pid`, walking up parent chain
+/// if the initial PID has no window. Handles multi-process terminals like Warp
+/// where the detected "warp" server (child) has no window but its parent
+/// "warp-terminal" (GUI process) owns the actual X11 window.
+fn find_window_for_pid(start_pid: u32) -> Option<String> {
+    let mut pid = start_pid;
+    for _ in 0..3 {
+        if pid <= 1 {
+            break;
+        }
+        if let Some(wid) = xdotool_search_pid(pid) {
+            return Some(wid);
+        }
+        // Walk to parent
+        let stat = match std::fs::read_to_string(format!("/proc/{}/stat", pid)) {
+            Ok(s) => s,
+            Err(_) => break,
+        };
+        let close = match stat.rfind(')') {
+            Some(i) => i,
+            None => break,
+        };
+        let fields: Vec<&str> = stat[close + 2..].split_whitespace().collect();
+        pid = match fields.get(1).and_then(|s| s.parse().ok()) {
+            Some(p) => p,
+            None => break,
+        };
+    }
+    None
 }
 
 fn xdotool_search_pid(pid: u32) -> Option<String> {

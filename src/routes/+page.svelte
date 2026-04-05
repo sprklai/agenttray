@@ -13,31 +13,58 @@
   let agents = $state<AgentStatus[]>([]);
   let pinned = $state(false);
   let statusDir = $state('~/.agent-monitor');
+  let ipcError = $state('');
   let aggregateState = $derived(aggregate(agents));
 
   onMount(() => {
     const cleanups: Array<() => void> = [];
 
     (async () => {
-      // Fetch cached state immediately (no 200ms delay waiting for backend push)
-      agents = await invoke<AgentStatus[]>('get_agents');
-      statusDir = await invoke<string>('get_status_dir') || statusDir;
-
+      // Register listeners FIRST to avoid missing events between
+      // get_agents() and listener registration (race condition fix)
       cleanups.push(await listen<AgentStatus[]>('agents-updated', (event) => {
         agents = event.payload;
+        ipcError = ''; // clear any previous error on successful event
       }));
 
       cleanups.push(await listen<boolean>('pinned-changed', (event) => {
         pinned = event.payload;
       }));
 
+      // Now fetch cached state (listener is already active for any updates)
+      try {
+        const result = await invoke<AgentStatus[]>('get_agents');
+        console.log('[AgentTray] get_agents returned', result.length, 'agents');
+        agents = result;
+      } catch (e) {
+        ipcError = `IPC error: ${e}`;
+        console.error('[AgentTray] get_agents failed:', e);
+      }
+
+      // Retry once if initial fetch returned empty (backend may not have
+      // completed first scan yet on cold start)
+      if (agents.length === 0) {
+        await new Promise(r => setTimeout(r, 600));
+        try {
+          const retry = await invoke<AgentStatus[]>('get_agents');
+          console.log('[AgentTray] retry get_agents returned', retry.length, 'agents');
+          if (retry.length > 0) agents = retry;
+        } catch {}
+      }
+
+      try {
+        statusDir = await invoke<string>('get_status_dir') || statusDir;
+      } catch {}
+
       const win = getCurrentWindow();
       let showTime = Date.now();
 
-      // Track when the window becomes visible so we can ignore
-      // immediate blur events (e.g. from global shortcut toggle)
-      cleanups.push(await listen('tauri://focus', () => {
+      // Re-fetch agents when popup is shown (also works around HMR state loss)
+      cleanups.push(await listen('tauri://focus', async () => {
         showTime = Date.now();
+        try {
+          agents = await invoke<AgentStatus[]>('get_agents');
+        } catch {}
       }));
 
       // Ignore blur events within 300ms of focus — the global shortcut
@@ -96,10 +123,15 @@
     </div>
   </div>
 
-  <!-- Focus error toast -->
+  <!-- Error toasts -->
   {#if focusError}
     <div class="px-3 py-1.5 bg-[#3a2020] border-b border-red-500/20 text-[10px] text-red-400 truncate">
       {focusError}
+    </div>
+  {/if}
+  {#if ipcError}
+    <div class="px-3 py-1.5 bg-[#3a2020] border-b border-red-500/20 text-[10px] text-red-400 truncate">
+      {ipcError}
     </div>
   {/if}
 
@@ -110,7 +142,7 @@
     </p>
   {:else}
     <ul class="py-1 m-0 p-0 glass-scroll" style="max-height: 360px; overflow-y: auto;">
-      {#each agents as agent (agent.name)}
+      {#each agents as agent (agent.id)}
         <AgentRow {agent} onFocus={() => focusAgent(agent)} />
       {/each}
     </ul>

@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
+
+use crate::notifier::SystemBeepNotifier;
 
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
@@ -20,12 +22,18 @@ pub struct TerminalInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentStatus {
+    /// Stable identity for dedup, list keying, and notification tracking.
+    /// For scanned agents: "scan:<tty_label>". For file-backed: "file:<stem>".
+    pub id: String,
     pub name: String,
     pub status: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal: Option<TerminalInfo>,
     pub can_focus: bool,
+    /// CPU usage percentage (None for file-based agents without CPU data).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<f64>,
 }
 
 pub fn status_dir() -> Option<PathBuf> {
@@ -81,12 +89,15 @@ pub fn parse_status_file(path: &Path) -> Option<AgentStatus> {
             .map(|t| !t.focus_id.is_empty() && t.focus_id != "0")
             .unwrap_or(false);
 
+        let id = format!("file:{}", name);
         Some(AgentStatus {
+            id,
             name,
             status,
             message,
             terminal,
             can_focus,
+            cpu: None,
         })
     } else {
         // Legacy pipe format: "status|message"
@@ -94,12 +105,15 @@ pub fn parse_status_file(path: &Path) -> Option<AgentStatus> {
             Some((s, m)) => (s.to_string(), m.to_string()),
             None => (trimmed.to_string(), String::new()),
         };
+        let id = format!("file:{}", name);
         Some(AgentStatus {
+            id,
             name,
             status,
             message,
             terminal: None,
             can_focus: false,
+            cpu: None,
         })
     }
 }
@@ -155,13 +169,19 @@ fn sort_agents(agents: &mut [AgentStatus]) {
 
 /// Cached latest merged agent list for on-demand popup refresh.
 static LATEST_AGENTS: Mutex<Vec<AgentStatus>> = Mutex::new(Vec::new());
+static NOTIFIER: LazyLock<SystemBeepNotifier> = LazyLock::new(|| SystemBeepNotifier);
 
 fn emit_agents(app: &AppHandle, agents: Vec<AgentStatus>) {
+    log::info!("emit_agents: {} agents", agents.len());
+    for a in &agents {
+        log::debug!("  agent: name={:?} status={:?}", a.name, a.status);
+    }
     {
         let mut cache = LATEST_AGENTS.lock().unwrap_or_else(|e| {
             log::warn!("LATEST_AGENTS mutex poisoned, recovering");
             e.into_inner()
         });
+        crate::notifier::detect_and_notify(&cache, &agents, &*NOTIFIER);
         *cache = agents.clone();
     }
     crate::tray::update_icon(app, &agents);
@@ -189,10 +209,12 @@ pub fn get_status_dir() -> String {
 /// Tauri command: return cached agents (called by frontend on mount).
 #[tauri::command]
 pub fn get_agents() -> Vec<AgentStatus> {
-    LATEST_AGENTS.lock().unwrap_or_else(|e| {
+    let agents = LATEST_AGENTS.lock().unwrap_or_else(|e| {
         log::warn!("LATEST_AGENTS mutex poisoned, recovering");
         e.into_inner()
-    }).clone()
+    }).clone();
+    log::info!("get_agents: returning {} agents", agents.len());
+    agents
 }
 
 fn read_and_emit_merged(app: &AppHandle, dir: &Path, scanned: &[AgentStatus]) {
@@ -365,9 +387,9 @@ mod tests {
     #[test]
     fn sort_needs_input_before_working() {
         let mut agents = vec![
-            AgentStatus { name: "b".into(), status: "working".into(), message: "".into(), terminal: None, can_focus: false },
-            AgentStatus { name: "a".into(), status: "needs-input".into(), message: "".into(), terminal: None, can_focus: false },
-            AgentStatus { name: "c".into(), status: "idle".into(), message: "".into(), terminal: None, can_focus: false },
+            AgentStatus { id: "t:b".into(), name: "b".into(), status: "working".into(), message: "".into(), terminal: None, can_focus: false, cpu: None },
+            AgentStatus { id: "t:a".into(), name: "a".into(), status: "needs-input".into(), message: "".into(), terminal: None, can_focus: false, cpu: None },
+            AgentStatus { id: "t:c".into(), name: "c".into(), status: "idle".into(), message: "".into(), terminal: None, can_focus: false, cpu: None },
         ];
         sort_agents(&mut agents);
         assert_eq!(agents[0].status, "needs-input");
@@ -378,6 +400,7 @@ mod tests {
     #[test]
     fn dedup_scanned_when_file_agent_has_same_focus_id() {
         let file_agent = AgentStatus {
+            id: "file:myagent".into(),
             name: "myagent".into(),
             status: "working".into(),
             message: "from wrap.sh".into(),
@@ -389,8 +412,10 @@ mod tests {
                 window_title: None,
             }),
             can_focus: true,
+            cpu: None,
         };
         let scanned_dup = AgentStatus {
+            id: "scan:pts/1".into(),
             name: "Project · Kitty · pts/1".into(),
             status: "idle".into(),
             message: "scanned".into(),
@@ -402,8 +427,10 @@ mod tests {
                 window_title: None,
             }),
             can_focus: true,
+            cpu: None,
         };
         let scanned_unique = AgentStatus {
+            id: "scan:pts/2".into(),
             name: "Other · Alacritty".into(),
             status: "working".into(),
             message: "different".into(),
@@ -415,6 +442,7 @@ mod tests {
                 window_title: None,
             }),
             can_focus: true,
+            cpu: None,
         };
 
         // Simulate what read_and_emit_merged does
@@ -453,4 +481,5 @@ mod tests {
         let result = parse_status_file(f.path()).unwrap();
         assert!(result.message.len() <= 500);
     }
+
 }

@@ -123,7 +123,13 @@ pub fn toggle_popup(app: &AppHandle) {
             }
             let _ = win.show();
             let _ = win.set_focus();
-            // State is pushed to the frontend when it mounts and calls get_agents
+            // Emit after a short delay so the WebView has time to
+            // load and register its event listeners
+            let h = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                emit_current_state(&h);
+            });
         }
         Err(e) => log::error!("Failed to create popup window: {}", e),
     }
@@ -173,11 +179,13 @@ mod tests {
 
     fn agent(status: &str) -> AgentStatus {
         AgentStatus {
+            id: "test:0".into(),
             name: "test".into(),
             status: status.into(),
             message: "".into(),
             terminal: None,
             can_focus: false,
+            cpu: None,
         }
     }
 

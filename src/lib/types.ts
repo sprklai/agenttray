@@ -9,11 +9,13 @@ export interface TerminalInfo {
 }
 
 export interface AgentStatus {
+  id: string;
   name: string;
   status: Status;
   message: string;
   terminal: TerminalInfo | null;
   can_focus: boolean;
+  cpu?: number;
 }
 
 export const STATUS_PRIORITY: Record<Status, number> = {
