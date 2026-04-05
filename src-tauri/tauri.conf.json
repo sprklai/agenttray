@@ -12,6 +12,7 @@
   "app": {
     "withGlobalTauri": true,
     "windows": [],
+    "macOSPrivateApi": true,
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
     }
