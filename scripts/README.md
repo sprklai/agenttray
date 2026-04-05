@@ -69,6 +69,46 @@ macOS signing requires these repository secrets (shared with the NSR Tech org):
 
 You can also trigger builds from the [Actions tab](https://github.com/sprklai/agenttray/actions/workflows/release.yml) with inputs for platform selection, version override, and publish toggle.
 
+## hooks/
+
+### install-hooks.sh
+
+Installs/uninstalls AgentTray hook entries into AI CLI settings files. Uses `jq` to safely merge entries without overwriting existing settings.
+
+```bash
+./scripts/hooks/install-hooks.sh all              # Install for all CLIs
+./scripts/hooks/install-hooks.sh claude            # Claude Code only
+./scripts/hooks/install-hooks.sh codex             # Codex CLI only
+./scripts/hooks/install-hooks.sh gemini            # Gemini CLI only
+./scripts/hooks/install-hooks.sh all --uninstall   # Remove all hooks
+```
+
+All hook entries are tagged with `"agent-tray"` — the installer removes existing tagged entries before adding new ones (safe to re-run). The `--uninstall` flag removes only AgentTray entries.
+
+**Settings files modified:**
+
+| CLI          | File                          |
+|--------------|-------------------------------|
+| Claude Code  | `~/.claude/settings.json`     |
+| Codex CLI    | `~/.codex/hooks.json`         |
+| Gemini CLI   | `~/.gemini/settings.json`     |
+
+### agent-tray-hook.sh
+
+Universal hook bridge called by all supported CLIs. Reads hook event JSON from stdin, auto-detects which CLI is calling it, maps events to AgentTray status, and writes atomic status files to `~/.agent-monitor/`.
+
+**Supported events by CLI:**
+
+| Claude Code       | Codex CLI         | Gemini CLI        |
+|-------------------|-------------------|-------------------|
+| SessionStart      | SessionStart      | SessionStart      |
+| Notification      | PreToolUse        | SessionEnd        |
+| Stop              | PostToolUse       | BeforeAgent       |
+| PreToolUse        | Stop              | AfterAgent        |
+| SubagentStop      | UserPromptSubmit  | BeforeTool/AfterTool |
+|                   |                   | Notification      |
+|                   |                   | PreCompress       |
+
 ## registry.sh
 
 Terminal detector registry. Sources detector scripts from `detectors/` and returns the first matching terminal info as JSON.

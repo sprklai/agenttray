@@ -2,15 +2,19 @@
 
 A system tray app that monitors AI coding agents in real-time and displays their status at a glance. Built with Tauri 2, SvelteKit, and Rust.
 
+Supports **Claude Code**, **Codex CLI**, and **Gemini CLI** out of the box — via native hooks or process scanning.
+
 ## Features
 
 - **Live status monitoring** — colored tray icon reflects the most urgent agent state
 - **Popup dashboard** — click the tray icon to see all agents with status, message, and focus button
 - **Terminal focus** — jump directly to the terminal running a specific agent
-- **Process scanning** — automatically detects running Claude CLI instances via `/proc`
+- **Native hook integration** — installs lightweight hooks into Claude Code, Codex CLI, and Gemini CLI for instant status updates
+- **Process scanning** — automatically detects running CLI instances via `/proc` (Linux) as a fallback
+- **Source-aware dedup** — merges hook-reported and process-scanned agents without duplicates
 - **File-based status** — agents report status via simple JSON files in `~/.agent-monitor/`
 - **Global hotkey** — `Ctrl+Shift+A` toggles the popup from anywhere
-- **Lightweight** — no background services, no database, just file watchers and `/proc` reads
+- **Lightweight** — no background services, no database, just file watchers and hooks
 
 ## Status States
 
@@ -25,15 +29,30 @@ A system tray app that monitors AI coding agents in real-time and displays their
 
 ## How It Works
 
+AgentTray uses two complementary strategies to track agents:
+
+### 1. Hooks (recommended)
+
 ```
-wrap.sh writes ~/.agent-monitor/<name>.status (JSON)
+CLI hook fires → agent-tray-hook.sh maps event to status
+  → writes ~/.agent-monitor/<cli>-<session>.status (JSON)
   → watcher.rs detects file change (inotify)
   → emits "agents-updated" Tauri event
   → Svelte popup re-renders agent list
   → tray icon color updates to match aggregate state
 ```
 
-Agents are wrapped with `scripts/wrap.sh`, which detects the terminal type, monitors stdout for input prompts, and writes atomic status updates. The Rust backend watches the status directory and also scans `/proc` for live Claude CLI processes to merge both sources.
+Hooks are installed into each CLI's settings file and fire on events like session start, tool use, notifications, and stop. The hook script auto-detects which CLI is calling it and maps events to the appropriate status.
+
+### 2. Process scanning (fallback)
+
+```
+watcher.rs scans /proc for running CLI processes
+  → merges with hook-reported agents (dedup by session)
+  → emits "agents-updated" Tauri event
+```
+
+Process scanning works without any setup but provides less granular status (just running/not running). Hook-sourced agents take priority when both sources report the same session.
 
 ## Prerequisites
 
@@ -59,6 +78,47 @@ bun install
 cargo tauri dev
 ```
 
+## Installing Hooks
+
+The recommended way to connect AgentTray to your AI CLI tools:
+
+```bash
+# Install hooks for all supported CLIs
+./scripts/hooks/install-hooks.sh all
+
+# Or install for a specific CLI
+./scripts/hooks/install-hooks.sh claude
+./scripts/hooks/install-hooks.sh codex
+./scripts/hooks/install-hooks.sh gemini
+
+# Uninstall
+./scripts/hooks/install-hooks.sh all --uninstall
+```
+
+Requires `jq` to be installed.
+
+### What the installer does
+
+The installer **merges** hook entries into each CLI's settings file — it does not overwrite existing settings. All entries are tagged with `"agent-tray"` for clean identification and removal.
+
+| CLI          | Settings file modified                |
+|--------------|---------------------------------------|
+| Claude Code  | `~/.claude/settings.json`             |
+| Codex CLI    | `~/.codex/hooks.json`                 |
+| Gemini CLI   | `~/.gemini/settings.json`             |
+
+> **Note:** Claude Code hooks must live in `~/.claude/settings.json` — there is no alternative location. The installer safely merges using `jq` and the `--uninstall` flag cleanly removes only AgentTray entries, leaving all other settings intact.
+
+### Alternative: wrap.sh
+
+For agents that don't support hooks, or for custom commands:
+
+```bash
+./scripts/wrap.sh my-agent -- claude chat
+```
+
+Creates `~/.agent-monitor/my-agent.status` with real-time JSON status updates. See `scripts/README.md` for all script documentation.
+
 ## Build Commands
 
 ```bash
@@ -70,14 +130,6 @@ cargo tauri dev              # Full app in dev mode
 cargo tauri build            # Production build
 ```
 
-## Wrapping an Agent
-
-```bash
-./scripts/wrap.sh my-agent -- claude chat
-```
-
-Creates `~/.agent-monitor/my-agent.status` with real-time JSON status updates. See `scripts/README.md` for all script documentation.
-
 ## Project Structure
 
 ```
@@ -85,7 +137,10 @@ Creates `~/.agent-monitor/my-agent.status` with real-time JSON status updates. S
 │   ├── build.sh              # Build automation
 │   ├── wrap.sh               # Agent command wrapper
 │   ├── registry.sh           # Terminal detector registry
-│   └── detectors/            # Terminal detection scripts
+│   ├── detectors/            # Terminal detection scripts
+│   └── hooks/
+│       ├── install-hooks.sh  # Hook installer/uninstaller
+│       └── agent-tray-hook.sh # Universal hook bridge script
 ├── src/
 │   ├── routes/+page.svelte   # Popup UI
 │   ├── lib/components/       # Svelte components (AgentRow, StatusDot, etc.)
@@ -93,14 +148,13 @@ Creates `~/.agent-monitor/my-agent.status` with real-time JSON status updates. S
 │   └── lib/utils.ts          # Utility functions
 ├── src-tauri/
 │   ├── src/main.rs           # App entry, tray setup, watcher spawn
-│   ├── src/watcher.rs        # File watcher + /proc scanner
+│   ├── src/watcher.rs        # File watcher + /proc scanner (strategy pattern)
 │   ├── src/tray.rs           # Tray icon + popup window management
 │   ├── src/focus.rs          # Terminal focus command router
 │   ├── src/focusers/         # Platform-specific focus handlers
 │   ├── icons/                # Tray state icons (22x22 PNGs)
 │   └── Cargo.toml            # Rust dependencies
 ├── CLAUDE.md                 # Claude Code project instructions
-├── plan.md                   # Detailed architecture spec
 └── package.json              # Frontend dependencies
 ```
 
