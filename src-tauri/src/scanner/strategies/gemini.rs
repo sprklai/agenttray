@@ -54,6 +54,10 @@ impl CliStrategy for GeminiStrategy {
     fn tool_label(&self) -> &str {
         "Gemini"
     }
+
+    fn cli_name(&self) -> &str {
+        "gemini"
+    }
 }
 
 #[cfg(test)]

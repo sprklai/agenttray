@@ -186,6 +186,11 @@ mod tests {
             terminal: None,
             can_focus: false,
             cpu: None,
+            source: None,
+            cli: None,
+            session_id: None,
+            hook_event: None,
+            hook_matcher: None,
         }
     }
 

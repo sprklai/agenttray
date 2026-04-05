@@ -69,6 +69,10 @@ impl CliStrategy for ClaudeCodeStrategy {
     fn tool_label(&self) -> &str {
         "Claude Code"
     }
+
+    fn cli_name(&self) -> &str {
+        "claude-code"
+    }
 }
 
 /// Try to infer state from the terminal window title.

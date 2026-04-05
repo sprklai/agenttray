@@ -3,7 +3,11 @@ use crate::watcher::AgentStatus;
 /// Events that can trigger a notification.
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
-    NeedsInput { agent_name: String },
+    NeedsInput {
+        agent_name: String,
+        /// Hook-provided reason: "permission_prompt", "idle_prompt", "elicitation_dialog", etc.
+        reason: Option<String>,
+    },
 }
 
 /// Swappable notification backend.
@@ -17,8 +21,9 @@ pub struct SystemBeepNotifier;
 impl Notifier for SystemBeepNotifier {
     fn notify(&self, event: &AgentEvent) {
         match event {
-            AgentEvent::NeedsInput { agent_name } => {
-                log::info!("Agent '{}' needs input — playing alert", agent_name);
+            AgentEvent::NeedsInput { agent_name, reason } => {
+                let reason_str = reason.as_deref().unwrap_or("unknown");
+                log::info!("Agent '{}' needs input ({}) — playing alert", agent_name, reason_str);
                 play_system_beep();
             }
         }
@@ -98,6 +103,7 @@ pub fn detect_and_notify(old: &[AgentStatus], new: &[AgentStatus], notifier: &dy
         if !was_needs_input {
             notifier.notify(&AgentEvent::NeedsInput {
                 agent_name: agent.name.clone(),
+                reason: agent.hook_matcher.clone(),
             });
         }
     }
@@ -124,6 +130,11 @@ mod tests {
             terminal: None,
             can_focus: false,
             cpu: None,
+            source: None,
+            cli: None,
+            session_id: None,
+            hook_event: None,
+            hook_matcher: None,
         }
     }
 

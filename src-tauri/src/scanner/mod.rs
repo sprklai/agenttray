@@ -63,8 +63,10 @@ impl Scanner {
 
     pub fn scan(&mut self) -> Vec<AgentStatus> {
         let procs = platform::find_cli_processes(&self.strategies);
-        let mut agents = Vec::new();
+        let mut agents: Vec<AgentStatus> = Vec::new();
         let mut seen = std::collections::HashSet::new();
+        // Track which tty_labels we've already emitted to avoid duplicate IDs
+        let mut seen_ttys: HashMap<String, usize> = HashMap::new();
 
         for (mut p, strategy) in procs {
             seen.insert(p.pid);
@@ -132,7 +134,7 @@ impl Scanner {
 
             let id = format!("scan:{}", p.tty_label);
 
-            agents.push(AgentStatus {
+            let agent = AgentStatus {
                 id,
                 name,
                 status: detected.status,
@@ -140,7 +142,24 @@ impl Scanner {
                 terminal,
                 can_focus,
                 cpu: Some(cpu_pct),
-            });
+                source: Some("scan".into()),
+                cli: Some(strategy.cli_name().to_string()),
+                session_id: None,
+                hook_event: None,
+                hook_matcher: None,
+            };
+
+            // Dedup by tty: keep the higher-priority (lower numeric) status
+            if let Some(&prev_idx) = seen_ttys.get(&p.tty_label) {
+                let prev_prio = crate::watcher::status_priority_num(&agents[prev_idx].status);
+                let cur_prio = crate::watcher::status_priority_num(&agent.status);
+                if cur_prio < prev_prio {
+                    agents[prev_idx] = agent;
+                }
+            } else {
+                seen_ttys.insert(p.tty_label.clone(), agents.len());
+                agents.push(agent);
+            }
 
             self.prev.insert(
                 p.pid,

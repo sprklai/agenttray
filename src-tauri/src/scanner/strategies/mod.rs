@@ -39,6 +39,9 @@ pub trait CliStrategy: Send + Sync {
     /// Human-readable tool label shown in the UI (e.g., "Claude Code").
     #[allow(dead_code)]
     fn tool_label(&self) -> &str;
+
+    /// Machine-readable CLI name for status files (e.g., "claude-code").
+    fn cli_name(&self) -> &str;
 }
 
 /// Returns all registered CLI strategies.

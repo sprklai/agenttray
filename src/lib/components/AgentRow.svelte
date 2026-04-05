@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { AgentStatus } from '$lib/types';
-  import { STATUS_LABEL } from '$lib/types';
+  import { STATUS_LABEL, CLI_LABEL, CLI_COLOR } from '$lib/types';
   import StatusDot from './StatusDot.svelte';
 
   let {
@@ -9,6 +9,9 @@
   }: { agent: AgentStatus; onFocus: () => void } = $props();
 
   let hovered = $state(false);
+
+  let cliLabel = $derived(agent.cli ? CLI_LABEL[agent.cli] || '' : '');
+  let cliColor = $derived(agent.cli ? CLI_COLOR[agent.cli] || '#888' : '#888');
 </script>
 
 <li
@@ -20,7 +23,15 @@
   <StatusDot status={agent.status} />
 
   <div class="flex-1 min-w-0">
-    <p class="text-[12px] font-medium text-[#e8e6e1] truncate">{agent.name}</p>
+    <div class="flex items-center gap-1.5">
+      <p class="text-[12px] font-medium text-[#e8e6e1] truncate">{agent.name}</p>
+      {#if cliLabel}
+        <span
+          class="text-[9px] font-semibold px-[5px] py-[1px] rounded-[3px] flex-shrink-0 uppercase tracking-wide"
+          style="color: {cliColor}; background: {cliColor}18; border: 0.5px solid {cliColor}30;"
+        >{cliLabel}</span>
+      {/if}
+    </div>
     <p class="text-[11px] text-[#8a8880] truncate mt-[1px]">
       {agent.message || STATUS_LABEL[agent.status]}
     </p>

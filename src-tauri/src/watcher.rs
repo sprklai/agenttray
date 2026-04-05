@@ -34,13 +34,28 @@ pub struct AgentStatus {
     /// CPU usage percentage (None for file-based agents without CPU data).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu: Option<f64>,
+    /// Detection source: "hook", "wrap", or "scan".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Which CLI tool: "claude-code", "codex", "gemini".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cli: Option<String>,
+    /// Original session ID from the CLI.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Hook event name (e.g. "Notification", "PreToolUse").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hook_event: Option<String>,
+    /// Hook matcher/subtype (e.g. "permission_prompt", "Bash").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hook_matcher: Option<String>,
 }
 
 pub fn status_dir() -> Option<PathBuf> {
     dirs_next::home_dir().map(|h| h.join(".agent-monitor"))
 }
 
-fn status_priority(status: &str) -> u8 {
+pub fn status_priority_num(status: &str) -> u8 {
     match status {
         "needs-input" => 0,
         "error" => 1,
@@ -89,6 +104,12 @@ pub fn parse_status_file(path: &Path) -> Option<AgentStatus> {
             .map(|t| !t.focus_id.is_empty() && t.focus_id != "0")
             .unwrap_or(false);
 
+        let source = val.get("source").and_then(|s| s.as_str()).map(String::from);
+        let cli = val.get("cli").and_then(|s| s.as_str()).map(String::from);
+        let session_id = val.get("session_id").and_then(|s| s.as_str()).map(String::from);
+        let hook_event = val.get("hook_event").and_then(|s| s.as_str()).map(String::from);
+        let hook_matcher = val.get("hook_matcher").and_then(|s| s.as_str()).map(String::from);
+
         let id = format!("file:{}", name);
         Some(AgentStatus {
             id,
@@ -98,6 +119,11 @@ pub fn parse_status_file(path: &Path) -> Option<AgentStatus> {
             terminal,
             can_focus,
             cpu: None,
+            source,
+            cli,
+            session_id,
+            hook_event,
+            hook_matcher,
         })
     } else {
         // Legacy pipe format: "status|message"
@@ -114,6 +140,11 @@ pub fn parse_status_file(path: &Path) -> Option<AgentStatus> {
             terminal: None,
             can_focus: false,
             cpu: None,
+            source: Some("wrap".into()),
+            cli: None,
+            session_id: None,
+            hook_event: None,
+            hook_matcher: None,
         })
     }
 }
@@ -161,8 +192,8 @@ fn read_all(dir: &Path) -> Vec<AgentStatus> {
 
 fn sort_agents(agents: &mut [AgentStatus]) {
     agents.sort_by(|a, b| {
-        let pa = status_priority(&a.status);
-        let pb = status_priority(&b.status);
+        let pa = status_priority_num(&a.status);
+        let pb = status_priority_num(&b.status);
         pa.cmp(&pb).then_with(|| a.name.cmp(&b.name))
     });
 }
@@ -217,20 +248,104 @@ pub fn get_agents() -> Vec<AgentStatus> {
     agents
 }
 
+/// Tauri command: install or uninstall AgentTray hooks for a CLI tool.
+/// `cli` should be "claude", "codex", "gemini", or "all".
+/// Set `uninstall` to true to remove hooks instead.
+#[tauri::command]
+pub fn install_hooks(cli: String, uninstall: bool) -> Result<String, String> {
+    let script = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .map(|dir| {
+            // In dev mode, scripts are relative to the project root
+            // In production, they're bundled as resources
+            let dev_path = dir
+                .ancestors()
+                .find(|d| d.join("scripts").exists())
+                .map(|d| d.join("scripts/hooks/install-hooks.sh"));
+            dev_path.unwrap_or_else(|| dir.join("scripts/hooks/install-hooks.sh"))
+        })
+        .ok_or_else(|| "Could not locate install-hooks.sh".to_string())?;
+
+    if !script.exists() {
+        return Err(format!("Hook installer not found at: {}", script.display()));
+    }
+
+    let mut cmd = std::process::Command::new("bash");
+    cmd.arg(&script).arg(&cli);
+    if uninstall {
+        cmd.arg("--uninstall");
+    }
+
+    let output = cmd.output().map_err(|e| format!("Failed to run installer: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        log::info!("Hook installation succeeded for '{}': {}", cli, stdout.trim());
+        Ok(stdout)
+    } else {
+        let msg = if stderr.is_empty() { &stdout } else { &stderr };
+        log::error!("Hook installation failed for '{}': {}", cli, msg.trim());
+        Err(format!("Installation failed: {}", msg.trim()))
+    }
+}
+
+/// Source priority for dedup: hook beats wrap beats scan (lower = higher priority).
+fn source_priority(source: Option<&str>) -> u8 {
+    match source {
+        Some("hook") => 0,
+        Some("wrap") => 1,
+        Some("scan") => 2,
+        _ => 1, // default to wrap-level for legacy files without source
+    }
+}
+
 fn read_and_emit_merged(app: &AppHandle, dir: &Path, scanned: &[AgentStatus]) {
     let file_agents = read_all(dir);
 
-    // Collect focus_ids from file-based agents for dedup.
-    // File-based agents (from wrap.sh) have more accurate status,
-    // so when a scanned process matches one, we drop the scanned copy.
-    let file_focus_ids: std::collections::HashSet<String> = file_agents
+    // Dedup file agents: when multiple files share the same focus_id,
+    // keep the one with the highest source priority (hook > wrap).
+    let mut by_focus: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut keep = vec![true; file_agents.len()];
+
+    for (i, a) in file_agents.iter().enumerate() {
+        let fid = a.terminal.as_ref()
+            .map(|t| t.focus_id.as_str())
+            .unwrap_or("");
+        if fid.is_empty() || fid == "0" {
+            continue; // no focus_id — always keep
+        }
+        if let Some(&prev_idx) = by_focus.get(fid) {
+            let prev_prio = source_priority(file_agents[prev_idx].source.as_deref());
+            let cur_prio = source_priority(a.source.as_deref());
+            if cur_prio < prev_prio {
+                keep[prev_idx] = false;
+                by_focus.insert(fid.to_string(), i);
+            } else {
+                keep[i] = false;
+            }
+        } else {
+            by_focus.insert(fid.to_string(), i);
+        }
+    }
+
+    let deduped_files: Vec<AgentStatus> = file_agents.into_iter()
+        .enumerate()
+        .filter(|(i, _)| keep[*i])
+        .map(|(_, a)| a)
+        .collect();
+
+    // Collect focus_ids from surviving file agents for scan dedup
+    let file_focus_ids: std::collections::HashSet<String> = deduped_files
         .iter()
         .filter_map(|a| a.terminal.as_ref())
-        .filter(|t| !t.focus_id.is_empty())
+        .filter(|t| !t.focus_id.is_empty() && t.focus_id != "0")
         .map(|t| t.focus_id.clone())
         .collect();
 
-    let mut agents = file_agents;
+    let mut agents = deduped_files;
     for s in scanned {
         let dominated = s
             .terminal
@@ -384,12 +499,34 @@ mod tests {
         assert!(!result.can_focus);
     }
 
+    fn test_agent(id: &str, name: &str, status: &str) -> AgentStatus {
+        AgentStatus {
+            id: id.into(), name: name.into(), status: status.into(), message: "".into(),
+            terminal: None, can_focus: false, cpu: None,
+            source: None, cli: None, session_id: None, hook_event: None, hook_matcher: None,
+        }
+    }
+
+    fn test_agent_with_terminal(id: &str, name: &str, status: &str, focus_id: &str, label: &str, source: Option<&str>) -> AgentStatus {
+        AgentStatus {
+            id: id.into(), name: name.into(), status: status.into(), message: "".into(),
+            terminal: Some(TerminalInfo {
+                kind: "x11_generic".into(), focus_id: focus_id.into(),
+                outer_id: "".into(), label: label.into(), window_title: None,
+            }),
+            can_focus: !focus_id.is_empty(),
+            cpu: None,
+            source: source.map(|s| s.into()),
+            cli: None, session_id: None, hook_event: None, hook_matcher: None,
+        }
+    }
+
     #[test]
     fn sort_needs_input_before_working() {
         let mut agents = vec![
-            AgentStatus { id: "t:b".into(), name: "b".into(), status: "working".into(), message: "".into(), terminal: None, can_focus: false, cpu: None },
-            AgentStatus { id: "t:a".into(), name: "a".into(), status: "needs-input".into(), message: "".into(), terminal: None, can_focus: false, cpu: None },
-            AgentStatus { id: "t:c".into(), name: "c".into(), status: "idle".into(), message: "".into(), terminal: None, can_focus: false, cpu: None },
+            test_agent("t:b", "b", "working"),
+            test_agent("t:a", "a", "needs-input"),
+            test_agent("t:c", "c", "idle"),
         ];
         sort_agents(&mut agents);
         assert_eq!(agents[0].status, "needs-input");
@@ -399,53 +536,10 @@ mod tests {
 
     #[test]
     fn dedup_scanned_when_file_agent_has_same_focus_id() {
-        let file_agent = AgentStatus {
-            id: "file:myagent".into(),
-            name: "myagent".into(),
-            status: "working".into(),
-            message: "from wrap.sh".into(),
-            terminal: Some(TerminalInfo {
-                kind: "x11_generic".into(),
-                focus_id: "0x1234".into(),
-                outer_id: "".into(),
-                label: "Kitty".into(),
-                window_title: None,
-            }),
-            can_focus: true,
-            cpu: None,
-        };
-        let scanned_dup = AgentStatus {
-            id: "scan:pts/1".into(),
-            name: "Project · Kitty · pts/1".into(),
-            status: "idle".into(),
-            message: "scanned".into(),
-            terminal: Some(TerminalInfo {
-                kind: "x11_generic".into(),
-                focus_id: "0x1234".into(),
-                outer_id: "".into(),
-                label: "Kitty".into(),
-                window_title: None,
-            }),
-            can_focus: true,
-            cpu: None,
-        };
-        let scanned_unique = AgentStatus {
-            id: "scan:pts/2".into(),
-            name: "Other · Alacritty".into(),
-            status: "working".into(),
-            message: "different".into(),
-            terminal: Some(TerminalInfo {
-                kind: "x11_generic".into(),
-                focus_id: "0x5678".into(),
-                outer_id: "".into(),
-                label: "Alacritty".into(),
-                window_title: None,
-            }),
-            can_focus: true,
-            cpu: None,
-        };
+        let file_agent = test_agent_with_terminal("file:myagent", "myagent", "working", "0x1234", "Kitty", Some("wrap"));
+        let scanned_dup = test_agent_with_terminal("scan:pts/1", "Project · Kitty · pts/1", "idle", "0x1234", "Kitty", Some("scan"));
+        let scanned_unique = test_agent_with_terminal("scan:pts/2", "Other · Alacritty", "working", "0x5678", "Alacritty", Some("scan"));
 
-        // Simulate what read_and_emit_merged does
         let file_agents = vec![file_agent.clone()];
         let scanned = vec![scanned_dup, scanned_unique.clone()];
 
@@ -471,6 +565,25 @@ mod tests {
         assert_eq!(agents.len(), 2);
         assert_eq!(agents[0].name, "myagent");
         assert_eq!(agents[1].name, "Other · Alacritty");
+    }
+
+    #[test]
+    fn dedup_hook_beats_wrap_same_focus_id() {
+        // hook source should beat wrap source when they share a focus_id
+        assert!(source_priority(Some("hook")) < source_priority(Some("wrap")));
+        assert!(source_priority(Some("wrap")) < source_priority(Some("scan")));
+    }
+
+    #[test]
+    fn parse_hook_source_fields() {
+        let json = r#"{"v":1,"status":"needs-input","message":"Waiting for permission","source":"hook","cli":"claude-code","session_id":"abc123","hook_event":"Notification","hook_matcher":"permission_prompt","terminal":{"kind":"x11_generic","focus_id":"12345:999","outer_id":"","label":"Kitty"}}"#;
+        let f = write_temp(json);
+        let result = parse_status_file(f.path()).unwrap();
+        assert_eq!(result.source.as_deref(), Some("hook"));
+        assert_eq!(result.cli.as_deref(), Some("claude-code"));
+        assert_eq!(result.session_id.as_deref(), Some("abc123"));
+        assert_eq!(result.hook_event.as_deref(), Some("Notification"));
+        assert_eq!(result.hook_matcher.as_deref(), Some("permission_prompt"));
     }
 
     #[test]

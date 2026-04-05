@@ -56,6 +56,10 @@ impl CliStrategy for CodexStrategy {
     fn tool_label(&self) -> &str {
         "Codex"
     }
+
+    fn cli_name(&self) -> &str {
+        "codex"
+    }
 }
 
 #[cfg(test)]
