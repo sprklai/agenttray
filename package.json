@@ -11,10 +11,11 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
+    "@lucide/svelte": "^1.7.0",
     "@tauri-apps/api": "^2.10.1",
-    "@tauri-apps/plugin-shell": "^2",
+    "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-process": "^2",
-    "@lucide/svelte": "^1.7.0"
+    "@tauri-apps/plugin-shell": "^2"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.10",

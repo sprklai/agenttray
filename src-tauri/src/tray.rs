@@ -101,7 +101,7 @@ pub fn toggle_popup(app: &AppHandle) {
     // First open: create the popup window
     match WebviewWindowBuilder::new(app, "popup", WebviewUrl::default())
         .title("AgentTray")
-        .inner_size(300.0, 420.0) // Must match frontend: 292px content + 4px margin each side
+        .inner_size(400.0, 420.0) // Must match frontend: 392px content + 4px margin each side
         .decorations(false)
         .transparent(true)
         .always_on_top(true)
@@ -166,7 +166,7 @@ fn position_popup(app: &AppHandle, win: &tauri::WebviewWindow) {
         .or_else(|| app.available_monitors().ok().and_then(|m| m.into_iter().next()))
     {
         let size = monitor.size();
-        let x = size.width as i32 - 310;
+        let x = size.width as i32 - 410;
         // Linux/macOS: top of screen; Windows would use bottom
         let y = 32;
         let _ = win.set_position(tauri::PhysicalPosition::new(x, y));

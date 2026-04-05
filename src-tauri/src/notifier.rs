@@ -1,3 +1,6 @@
+use tauri::AppHandle;
+use tauri_plugin_notification::NotificationExt;
+
 use crate::watcher::AgentStatus;
 
 /// Events that can trigger a notification.
@@ -12,20 +15,67 @@ pub enum AgentEvent {
 
 /// Swappable notification backend.
 pub trait Notifier: Send + Sync {
-    fn notify(&self, event: &AgentEvent);
+    fn notify(&self, event: &AgentEvent, app: Option<&AppHandle>);
 }
 
 /// Plays a platform system sound via shell commands.
 pub struct SystemBeepNotifier;
 
 impl Notifier for SystemBeepNotifier {
-    fn notify(&self, event: &AgentEvent) {
+    fn notify(&self, event: &AgentEvent, _app: Option<&AppHandle>) {
         match event {
             AgentEvent::NeedsInput { agent_name, reason } => {
                 let reason_str = reason.as_deref().unwrap_or("unknown");
                 log::info!("Agent '{}' needs input ({}) — playing alert", agent_name, reason_str);
                 play_system_beep();
             }
+        }
+    }
+}
+
+/// Sends native OS desktop notifications via tauri-plugin-notification.
+pub struct DesktopNotifier;
+
+impl Notifier for DesktopNotifier {
+    fn notify(&self, event: &AgentEvent, app: Option<&AppHandle>) {
+        let Some(app) = app else {
+            log::warn!("DesktopNotifier: no AppHandle available, skipping notification");
+            return;
+        };
+        match event {
+            AgentEvent::NeedsInput { agent_name, reason } => {
+                let body = match reason.as_deref() {
+                    Some(r) => format!("{} needs your input ({})", agent_name, r),
+                    None => format!("{} needs your input", agent_name),
+                };
+                if let Err(e) = app.notification()
+                    .builder()
+                    .title("AgentTray")
+                    .body(&body)
+                    .show()
+                {
+                    log::warn!("Desktop notification failed: {}", e);
+                }
+            }
+        }
+    }
+}
+
+/// Fires multiple notifiers in sequence (beep + desktop banner).
+pub struct CompositeNotifier {
+    backends: Vec<Box<dyn Notifier>>,
+}
+
+impl CompositeNotifier {
+    pub fn new(backends: Vec<Box<dyn Notifier>>) -> Self {
+        Self { backends }
+    }
+}
+
+impl Notifier for CompositeNotifier {
+    fn notify(&self, event: &AgentEvent, app: Option<&AppHandle>) {
+        for backend in &self.backends {
+            backend.notify(event, app);
         }
     }
 }
@@ -89,7 +139,7 @@ fn platform_beep() -> Result<(), String> {
 
 /// Compare old and new agent lists; fire notifications for transitions to needs-input.
 /// Uses `id` for identity matching so title/name changes don't retrigger alerts.
-pub fn detect_and_notify(old: &[AgentStatus], new: &[AgentStatus], notifier: &dyn Notifier) {
+pub fn detect_and_notify(old: &[AgentStatus], new: &[AgentStatus], notifier: &dyn Notifier, app: Option<&AppHandle>) {
     for agent in new {
         if agent.status != "needs-input" {
             continue;
@@ -104,7 +154,7 @@ pub fn detect_and_notify(old: &[AgentStatus], new: &[AgentStatus], notifier: &dy
             notifier.notify(&AgentEvent::NeedsInput {
                 agent_name: agent.name.clone(),
                 reason: agent.hook_matcher.clone(),
-            });
+            }, app);
         }
     }
 }
@@ -116,7 +166,7 @@ mod tests {
 
     struct CountingNotifier(AtomicUsize);
     impl Notifier for CountingNotifier {
-        fn notify(&self, _event: &AgentEvent) {
+        fn notify(&self, _event: &AgentEvent, _app: Option<&AppHandle>) {
             self.0.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -143,7 +193,7 @@ mod tests {
         let n = CountingNotifier(AtomicUsize::new(0));
         let old = vec![agent("a", "needs-input")];
         let new = vec![agent("a", "needs-input")];
-        detect_and_notify(&old, &new, &n);
+        detect_and_notify(&old, &new, &n, None);
         assert_eq!(n.0.load(Ordering::Relaxed), 0);
     }
 
@@ -152,14 +202,14 @@ mod tests {
         let n = CountingNotifier(AtomicUsize::new(0));
         let old = vec![agent("a", "working")];
         let new = vec![agent("a", "needs-input")];
-        detect_and_notify(&old, &new, &n);
+        detect_and_notify(&old, &new, &n, None);
         assert_eq!(n.0.load(Ordering::Relaxed), 1);
     }
 
     #[test]
     fn notification_for_new_agent_as_needs_input() {
         let n = CountingNotifier(AtomicUsize::new(0));
-        detect_and_notify(&[], &[agent("a", "needs-input")], &n);
+        detect_and_notify(&[], &[agent("a", "needs-input")], &n, None);
         assert_eq!(n.0.load(Ordering::Relaxed), 1);
     }
 
@@ -168,7 +218,7 @@ mod tests {
         let n = CountingNotifier(AtomicUsize::new(0));
         let old = vec![agent("a", "idle")];
         let new = vec![agent("a", "working")];
-        detect_and_notify(&old, &new, &n);
+        detect_and_notify(&old, &new, &n, None);
         assert_eq!(n.0.load(Ordering::Relaxed), 0);
     }
 
@@ -185,7 +235,7 @@ mod tests {
             agent("b", "needs-input"),
             agent("c", "needs-input"),
         ];
-        detect_and_notify(&old, &new, &n);
+        detect_and_notify(&old, &new, &n, None);
         assert_eq!(n.0.load(Ordering::Relaxed), 2);
     }
 }

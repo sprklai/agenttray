@@ -100,8 +100,9 @@ impl Scanner {
                 }
             }
 
-            // Count direct child processes for the strategy
-            let child_count = count_children(p.pid);
+            // Count direct child processes, excluding known background services
+            // (MCP servers, worker services) that are always present.
+            let child_count = count_children(p.pid, strategy.excluded_substrings());
 
             // Delegate state detection to the strategy
             let detected = strategy.detect_state(&p, cpu_pct, child_count);
@@ -193,17 +194,40 @@ impl Scanner {
     }
 }
 
-/// Count direct child processes of a given PID.
+/// Count direct child processes of a given PID, excluding children whose
+/// command line contains any of the `excluded` substrings (e.g. "mcp-server",
+/// "worker-service"). This prevents persistent background services from
+/// inflating the child count and causing false "working" status.
 #[cfg(target_os = "linux")]
-fn count_children(pid: u32) -> u32 {
+fn count_children(pid: u32, excluded: &[&str]) -> u32 {
     let task_dir = format!("/proc/{}/task/{}/children", pid, pid);
-    std::fs::read_to_string(&task_dir)
-        .map(|s| s.split_whitespace().count() as u32)
-        .unwrap_or(0)
+    let children_str = match std::fs::read_to_string(&task_dir) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    if excluded.is_empty() {
+        return children_str.split_whitespace().count() as u32;
+    }
+
+    children_str
+        .split_whitespace()
+        .filter(|child_pid_str| {
+            let Ok(child_pid) = child_pid_str.parse::<u32>() else {
+                return true;
+            };
+            let cmdline_path = format!("/proc/{}/cmdline", child_pid);
+            let Ok(cmdline_bytes) = std::fs::read(&cmdline_path) else {
+                return true;
+            };
+            let cmdline = String::from_utf8_lossy(&cmdline_bytes);
+            !excluded.iter().any(|exc| cmdline.contains(exc))
+        })
+        .count() as u32
 }
 
 #[cfg(target_os = "macos")]
-fn count_children(pid: u32) -> u32 {
+fn count_children(pid: u32, _excluded: &[&str]) -> u32 {
     std::process::Command::new("pgrep")
         .args(["-P", &pid.to_string()])
         .output()
@@ -212,7 +236,7 @@ fn count_children(pid: u32) -> u32 {
 }
 
 #[cfg(target_os = "windows")]
-fn count_children(pid: u32) -> u32 {
+fn count_children(pid: u32, _excluded: &[&str]) -> u32 {
     std::process::Command::new("wmic")
         .args(["process", "where", &format!("ParentProcessId={}", pid), "get", "ProcessId", "/FORMAT:CSV"])
         .output()

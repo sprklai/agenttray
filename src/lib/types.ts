@@ -66,3 +66,10 @@ export const CLI_COLOR: Record<AgentCli, string> = {
   'gemini':      '#4a90d9',
   'unknown':     '#888888',
 };
+
+export const CLI_ICON_LABEL: Record<AgentCli, string> = {
+  'claude-code': 'Claude Code',
+  'codex':       'OpenAI Codex',
+  'gemini':      'Google Gemini',
+  'unknown':     'Unknown agent',
+};

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::notifier::SystemBeepNotifier;
+use crate::notifier::{CompositeNotifier, DesktopNotifier, SystemBeepNotifier};
 
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
@@ -200,7 +200,12 @@ fn sort_agents(agents: &mut [AgentStatus]) {
 
 /// Cached latest merged agent list for on-demand popup refresh.
 static LATEST_AGENTS: Mutex<Vec<AgentStatus>> = Mutex::new(Vec::new());
-static NOTIFIER: LazyLock<SystemBeepNotifier> = LazyLock::new(|| SystemBeepNotifier);
+static NOTIFIER: LazyLock<CompositeNotifier> = LazyLock::new(|| {
+    CompositeNotifier::new(vec![
+        Box::new(SystemBeepNotifier),
+        Box::new(DesktopNotifier),
+    ])
+});
 
 fn emit_agents(app: &AppHandle, agents: Vec<AgentStatus>) {
     log::info!("emit_agents: {} agents", agents.len());
@@ -212,7 +217,7 @@ fn emit_agents(app: &AppHandle, agents: Vec<AgentStatus>) {
             log::warn!("LATEST_AGENTS mutex poisoned, recovering");
             e.into_inner()
         });
-        crate::notifier::detect_and_notify(&cache, &agents, &*NOTIFIER);
+        crate::notifier::detect_and_notify(&cache, &agents, &*NOTIFIER, Some(app));
         *cache = agents.clone();
     }
     crate::tray::update_icon(app, &agents);

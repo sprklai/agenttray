@@ -102,7 +102,7 @@
   }
 </script>
 
-<div class="glass-panel glass-noise relative w-[292px] rounded-[14px] overflow-hidden m-[4px]">
+<div class="glass-panel glass-noise relative w-[392px] rounded-[14px] overflow-hidden m-[4px]">
   <!-- Header (drag region) -->
   <div data-tauri-drag-region class="flex items-center justify-between px-3.5 py-2.5 border-b border-white/[0.06]"
        style="background: rgba(255,255,255,0.03);">
