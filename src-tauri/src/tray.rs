@@ -107,9 +107,7 @@ pub fn toggle_popup(app: &AppHandle) {
 }
 
 fn emit_current_state(app: &AppHandle) {
-    if let Some(dir) = crate::watcher::status_dir() {
-        crate::watcher::read_and_emit(app, &dir);
-    }
+    crate::watcher::emit_latest(app);
 }
 
 pub fn hide_popup(app: &AppHandle) {

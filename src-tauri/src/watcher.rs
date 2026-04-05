@@ -1,9 +1,12 @@
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
+
+use crate::scanner::Scanner;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TerminalInfo {
@@ -127,10 +130,30 @@ fn sort_agents(agents: &mut [AgentStatus]) {
     });
 }
 
-pub fn read_and_emit(app: &AppHandle, dir: &Path) {
-    let agents = read_all(dir);
+/// Cached latest merged agent list for on-demand popup refresh.
+static LATEST_AGENTS: Mutex<Vec<AgentStatus>> = Mutex::new(Vec::new());
+
+fn emit_agents(app: &AppHandle, agents: Vec<AgentStatus>) {
+    {
+        let mut cache = LATEST_AGENTS.lock().unwrap_or_else(|e| e.into_inner());
+        *cache = agents.clone();
+    }
     crate::tray::update_icon(app, &agents);
     let _ = app.emit("agents-updated", &agents);
+}
+
+/// Re-emit the last known agent list (used when popup opens).
+pub fn emit_latest(app: &AppHandle) {
+    let agents = LATEST_AGENTS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    crate::tray::update_icon(app, &agents);
+    let _ = app.emit("agents-updated", &agents);
+}
+
+fn read_and_emit_merged(app: &AppHandle, dir: &Path, scanned: &[AgentStatus]) {
+    let mut agents = read_all(dir);
+    agents.extend_from_slice(scanned);
+    sort_agents(&mut agents);
+    emit_agents(app, agents);
 }
 
 pub fn watch(app: AppHandle) {
@@ -142,14 +165,18 @@ pub fn watch(app: AppHandle) {
         }
     };
 
-    // Create directory if it doesn't exist
     if let Err(e) = std::fs::create_dir_all(&dir) {
         log::error!("Failed to create {:?}: {}", dir, e);
         return;
     }
 
-    // Emit initial state
-    read_and_emit(&app, &dir);
+    let mut scanner = Scanner::new();
+    let scan_interval = Duration::from_secs(2);
+    let mut last_scan = Instant::now();
+
+    // Initial emit with first scan
+    let scanned = scanner.scan();
+    read_and_emit_merged(&app, &dir, &scanned);
 
     // Set up file watcher
     let (tx, rx) = std::sync::mpsc::channel();
@@ -157,11 +184,11 @@ pub fn watch(app: AppHandle) {
         Ok(w) => w,
         Err(e) => {
             log::error!("Failed to create file watcher: {}", e);
-            // Fallback: poll every 400ms
-            log::info!("Falling back to polling mode");
+            log::info!("Falling back to scan-only mode");
             loop {
-                std::thread::sleep(Duration::from_millis(400));
-                read_and_emit(&app, &dir);
+                std::thread::sleep(scan_interval);
+                let scanned = scanner.scan();
+                read_and_emit_merged(&app, &dir, &scanned);
             }
         }
     };
@@ -171,34 +198,38 @@ pub fn watch(app: AppHandle) {
         return;
     }
 
-    log::info!("Watching {:?} for status changes", dir);
+    log::info!("Watching {:?} + scanning /proc for live agents", dir);
 
-    // Debounce: coalesce events within 50ms
     let debounce = Duration::from_millis(50);
     let mut last_emit = Instant::now() - debounce;
+    let mut latest_scan: Vec<AgentStatus> = scanned;
 
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(event)) => {
-                match event.kind {
-                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
-                        if last_emit.elapsed() >= debounce {
-                            read_and_emit(&app, &dir);
-                            last_emit = Instant::now();
-                        }
-                    }
-                    _ => {}
+                if matches!(
+                    event.kind,
+                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                ) && last_emit.elapsed() >= debounce
+                {
+                    read_and_emit_merged(&app, &dir, &latest_scan);
+                    last_emit = Instant::now();
                 }
             }
             Ok(Err(e)) => log::warn!("Watch error: {}", e),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                // Check if we have a pending debounced emit
-                // (event arrived but was debounced, now enough time has passed)
-            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 log::error!("File watcher channel disconnected");
                 break;
             }
+        }
+
+        // Periodic process scan
+        if last_scan.elapsed() >= scan_interval {
+            latest_scan = scanner.scan();
+            read_and_emit_merged(&app, &dir, &latest_scan);
+            last_scan = Instant::now();
+            last_emit = Instant::now();
         }
     }
 }

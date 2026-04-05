@@ -2,6 +2,7 @@
 
 mod focus;
 mod focusers;
+mod scanner;
 mod tray;
 mod watcher;
 

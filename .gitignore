@@ -31,10 +31,8 @@ src-tauri/gen/
 # Logs
 *.log
 
-# Claude local settings
-.claude/settings.local.json
-.claude/plans/
-.claude/worktrees/
+# Claude Code
+.claude/
 
 # Build outputs
 *.bak
