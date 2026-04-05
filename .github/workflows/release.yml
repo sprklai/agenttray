@@ -60,6 +60,11 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
 
+      - name: Quality gates
+        run: |
+          bun run check
+          cargo test --manifest-path src-tauri/Cargo.toml
+
       - name: Build desktop (deb, rpm, appimage)
         uses: tauri-apps/tauri-action@v0
         env:
@@ -103,6 +108,11 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
 
+      - name: Quality gates
+        run: |
+          bun run check
+          cargo test --manifest-path src-tauri/Cargo.toml
+
       - name: Build desktop (msi, nsis)
         uses: tauri-apps/tauri-action@v0
         env:
@@ -145,6 +155,11 @@ jobs:
 
       - name: Install frontend dependencies
         run: bun install
+
+      - name: Quality gates
+        run: |
+          bun run check
+          cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Import Apple certificate
         env:

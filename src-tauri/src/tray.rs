@@ -46,7 +46,10 @@ pub fn update_icon(app: &AppHandle, agents: &[AgentStatus]) {
 
     // Only swap if state changed
     {
-        let mut last = LAST_STATE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut last = LAST_STATE.lock().unwrap_or_else(|e| {
+            log::warn!("LAST_STATE mutex poisoned, recovering");
+            e.into_inner()
+        });
         if last.as_str() == state {
             return;
         }
@@ -69,7 +72,6 @@ pub fn pin_popup(app: &AppHandle) {
     // Show popup if not already visible
     if let Some(win) = app.get_webview_window("popup") {
         if !win.is_visible().unwrap_or(false) {
-            position_popup(app, &win);
             let _ = win.show();
             let _ = win.set_focus();
             emit_current_state(app);
@@ -89,8 +91,7 @@ pub fn toggle_popup(app: &AppHandle) {
             let _ = win.hide();
             return;
         }
-        // Already exists but hidden — reposition, show, and refresh state
-        position_popup(app, &win);
+        // Already exists but hidden — show at last position and refresh state
         let _ = win.show();
         let _ = win.set_focus();
         emit_current_state(app);
@@ -100,7 +101,7 @@ pub fn toggle_popup(app: &AppHandle) {
     // First open: create the popup window
     match WebviewWindowBuilder::new(app, "popup", WebviewUrl::default())
         .title("AgentTray")
-        .inner_size(300.0, 420.0)
+        .inner_size(300.0, 420.0) // Must match frontend: 292px content + 4px margin each side
         .decorations(false)
         .transparent(true)
         .always_on_top(true)
@@ -115,18 +116,14 @@ pub fn toggle_popup(app: &AppHandle) {
             {
                 let _ = std::process::Command::new("wmctrl")
                     .args(["-r", "AgentTray", "-b", "remove,sticky"])
-                    .spawn();
+                    .output();
                 let _ = std::process::Command::new("wmctrl")
                     .args(["-r", "AgentTray", "-b", "add,sticky"])
-                    .spawn();
+                    .output();
             }
             let _ = win.show();
             let _ = win.set_focus();
-            let app = app.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                emit_current_state(&app);
-            });
+            // State is pushed to the frontend when it mounts and calls get_agents
         }
         Err(e) => log::error!("Failed to create popup window: {}", e),
     }
@@ -134,6 +131,17 @@ pub fn toggle_popup(app: &AppHandle) {
 
 fn emit_current_state(app: &AppHandle) {
     crate::watcher::emit_latest(app);
+}
+
+#[tauri::command]
+pub fn toggle_pin(app: AppHandle) {
+    if PINNED.load(Ordering::Relaxed) {
+        PINNED.store(false, Ordering::Relaxed);
+        let _ = app.emit("pinned-changed", false);
+    } else {
+        PINNED.store(true, Ordering::Relaxed);
+        let _ = app.emit("pinned-changed", true);
+    }
 }
 
 pub fn hide_popup(app: &AppHandle) {

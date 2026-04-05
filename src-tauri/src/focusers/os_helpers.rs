@@ -11,9 +11,7 @@ pub fn spawn_silent(cmd: &str, args: &[&str]) -> Result<(), String> {
             }
         }
         Err(e) => {
-            // Tool not installed — not an error for the user
-            log::debug!("{} not available: {}", cmd, e);
-            Ok(())
+            Err(format!("{} not available: {}", cmd, e))
         }
     }
 }

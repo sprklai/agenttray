@@ -23,23 +23,39 @@ TERMINAL_JSON=$(bash "$SCRIPT_DIR/registry.sh" 2>/dev/null)
 INPUT_PAT='\? $|\? .*\[|\[y/n\]|\[Y/n\]|\[yes/no\]|password:|Password:|passphrase:|Passphrase:|Enter to|Press .* to|Overwrite\?|Continue\?|Confirm\?|Proceed\?|Are you sure'
 [ -n "${INPUT_EXTRA:-}" ] && INPUT_PAT="$INPUT_PAT|$INPUT_EXTRA"
 
+# JSON-encode a string value (proper escaping of \, ", control chars)
+_json_str() {
+  local s="$1"
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$s" | jq -Rs .
+  else
+    # Bash fallback: escape backslash, double-quote, and control chars
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf '"%s"' "$s"
+  fi
+}
+
 # Atomic write helper
 _write_status() {
   local status="$1" message="$2"
-  local safe="${message//\"/\\\"}"
-  safe="${safe:0:500}"
-  printf '{"v":1,"status":"%s","message":"%s","terminal":%s}\n' \
+  message="${message:0:500}"
+  local safe
+  safe=$(_json_str "$message")
+  printf '{"v":1,"status":"%s","message":%s,"terminal":%s}\n' \
     "$status" "$safe" "$TERMINAL_JSON" > "$FILE.tmp"
   mv -f "$FILE.tmp" "$FILE"
 }
 
-# Cleanup on signal
+# Cleanup: remove status file so dead agents don't linger
 _cleanup() {
-  _write_status "offline" ""
-  rm -f "$FILE.tmp"
+  rm -f "$FILE" "$FILE.tmp"
   exit 130
 }
-trap _cleanup SIGTERM SIGINT
+trap _cleanup SIGTERM SIGINT SIGHUP
 
 # Write starting status
 _write_status "starting" ""
@@ -56,7 +72,8 @@ done
 # Check exit code of the piped command
 EXIT_CODE=${PIPESTATUS[0]}
 if [ "$EXIT_CODE" -eq 0 ]; then
-  _write_status "idle" ""
+  # Clean exit — remove status file so agent doesn't linger
+  rm -f "$FILE" "$FILE.tmp"
 else
   _write_status "error" "Exit code $EXIT_CODE"
 fi

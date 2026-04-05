@@ -13,6 +13,13 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 fn main() {
     env_logger::init();
 
+    // Log panics from any thread before the process aborts (release uses panic=abort)
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::error!("PANIC: {}", info);
+        default_hook(info);
+    }));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
@@ -80,7 +87,7 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![focus::focus_terminal])
+        .invoke_handler(tauri::generate_handler![focus::focus_terminal, watcher::get_agents, watcher::get_status_dir, tray::toggle_pin])
         .build(tauri::generate_context!())
         .expect("AgentTray failed to build")
         .run(|_app, event| {

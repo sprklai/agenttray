@@ -38,6 +38,9 @@ plan.md
 # Build outputs
 *.bak
 .worktrees/
+.worktree
 
-# Scripts
-scripts/
+# Script build artifacts
+scripts/*.tmp
+nocommit
+nocommit/

@@ -67,7 +67,9 @@ pub fn parse_status_file(path: &Path) -> Option<AgentStatus> {
             .unwrap_or("")
             .to_string();
         if message.len() > 500 {
-            message.truncate(500);
+            if let Some((idx, _)) = message.char_indices().nth(500) {
+                message.truncate(idx);
+            }
         }
 
         let terminal: Option<TerminalInfo> = val
@@ -102,21 +104,40 @@ pub fn parse_status_file(path: &Path) -> Option<AgentStatus> {
     }
 }
 
+/// How long an offline/error status file can sit untouched before we hide it.
+const STALE_TTL: Duration = Duration::from_secs(10 * 60); // 10 minutes
+
 fn read_all(dir: &Path) -> Vec<AgentStatus> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return Vec::new(),
     };
 
+    let now = std::time::SystemTime::now();
+
     let mut agents: Vec<AgentStatus> = entries
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("status") {
-                parse_status_file(&path)
-            } else {
-                None
+            if path.extension().and_then(|e| e.to_str()) != Some("status") {
+                return None;
             }
+
+            let agent = parse_status_file(&path)?;
+
+            // Filter stale terminal-state files: if offline or error and
+            // the file hasn't been written to in STALE_TTL, skip it.
+            if matches!(agent.status.as_str(), "offline" | "error" | "idle") {
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    if let Ok(mtime) = meta.modified() {
+                        if now.duration_since(mtime).unwrap_or_default() > STALE_TTL {
+                            return None;
+                        }
+                    }
+                }
+            }
+
+            Some(agent)
         })
         .collect();
 
@@ -137,7 +158,10 @@ static LATEST_AGENTS: Mutex<Vec<AgentStatus>> = Mutex::new(Vec::new());
 
 fn emit_agents(app: &AppHandle, agents: Vec<AgentStatus>) {
     {
-        let mut cache = LATEST_AGENTS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = LATEST_AGENTS.lock().unwrap_or_else(|e| {
+            log::warn!("LATEST_AGENTS mutex poisoned, recovering");
+            e.into_inner()
+        });
         *cache = agents.clone();
     }
     crate::tray::update_icon(app, &agents);
@@ -146,14 +170,56 @@ fn emit_agents(app: &AppHandle, agents: Vec<AgentStatus>) {
 
 /// Re-emit the last known agent list (used when popup opens).
 pub fn emit_latest(app: &AppHandle) {
-    let agents = LATEST_AGENTS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let agents = LATEST_AGENTS.lock().unwrap_or_else(|e| {
+        log::warn!("LATEST_AGENTS mutex poisoned, recovering");
+        e.into_inner()
+    }).clone();
     crate::tray::update_icon(app, &agents);
     let _ = app.emit("agents-updated", &agents);
 }
 
+/// Tauri command: return the platform-appropriate status directory path.
+#[tauri::command]
+pub fn get_status_dir() -> String {
+    status_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default()
+}
+
+/// Tauri command: return cached agents (called by frontend on mount).
+#[tauri::command]
+pub fn get_agents() -> Vec<AgentStatus> {
+    LATEST_AGENTS.lock().unwrap_or_else(|e| {
+        log::warn!("LATEST_AGENTS mutex poisoned, recovering");
+        e.into_inner()
+    }).clone()
+}
+
 fn read_and_emit_merged(app: &AppHandle, dir: &Path, scanned: &[AgentStatus]) {
-    let mut agents = read_all(dir);
-    agents.extend_from_slice(scanned);
+    let file_agents = read_all(dir);
+
+    // Collect focus_ids from file-based agents for dedup.
+    // File-based agents (from wrap.sh) have more accurate status,
+    // so when a scanned process matches one, we drop the scanned copy.
+    let file_focus_ids: std::collections::HashSet<String> = file_agents
+        .iter()
+        .filter_map(|a| a.terminal.as_ref())
+        .filter(|t| !t.focus_id.is_empty())
+        .map(|t| t.focus_id.clone())
+        .collect();
+
+    let mut agents = file_agents;
+    for s in scanned {
+        let dominated = s
+            .terminal
+            .as_ref()
+            .map(|t| !t.focus_id.is_empty() && file_focus_ids.contains(&t.focus_id))
+            .unwrap_or(false);
+        if !dominated {
+            agents.push(s.clone());
+        }
+    }
+
     sort_agents(&mut agents);
     emit_agents(app, agents);
 }
@@ -307,6 +373,76 @@ mod tests {
         assert_eq!(agents[0].status, "needs-input");
         assert_eq!(agents[1].status, "working");
         assert_eq!(agents[2].status, "idle");
+    }
+
+    #[test]
+    fn dedup_scanned_when_file_agent_has_same_focus_id() {
+        let file_agent = AgentStatus {
+            name: "myagent".into(),
+            status: "working".into(),
+            message: "from wrap.sh".into(),
+            terminal: Some(TerminalInfo {
+                kind: "x11_generic".into(),
+                focus_id: "0x1234".into(),
+                outer_id: "".into(),
+                label: "Kitty".into(),
+                window_title: None,
+            }),
+            can_focus: true,
+        };
+        let scanned_dup = AgentStatus {
+            name: "Project · Kitty · pts/1".into(),
+            status: "idle".into(),
+            message: "scanned".into(),
+            terminal: Some(TerminalInfo {
+                kind: "x11_generic".into(),
+                focus_id: "0x1234".into(),
+                outer_id: "".into(),
+                label: "Kitty".into(),
+                window_title: None,
+            }),
+            can_focus: true,
+        };
+        let scanned_unique = AgentStatus {
+            name: "Other · Alacritty".into(),
+            status: "working".into(),
+            message: "different".into(),
+            terminal: Some(TerminalInfo {
+                kind: "x11_generic".into(),
+                focus_id: "0x5678".into(),
+                outer_id: "".into(),
+                label: "Alacritty".into(),
+                window_title: None,
+            }),
+            can_focus: true,
+        };
+
+        // Simulate what read_and_emit_merged does
+        let file_agents = vec![file_agent.clone()];
+        let scanned = vec![scanned_dup, scanned_unique.clone()];
+
+        let file_focus_ids: std::collections::HashSet<String> = file_agents
+            .iter()
+            .filter_map(|a| a.terminal.as_ref())
+            .filter(|t| !t.focus_id.is_empty())
+            .map(|t| t.focus_id.clone())
+            .collect();
+
+        let mut agents = file_agents;
+        for s in &scanned {
+            let dominated = s
+                .terminal
+                .as_ref()
+                .map(|t| !t.focus_id.is_empty() && file_focus_ids.contains(&t.focus_id))
+                .unwrap_or(false);
+            if !dominated {
+                agents.push(s.clone());
+            }
+        }
+
+        assert_eq!(agents.len(), 2);
+        assert_eq!(agents[0].name, "myagent");
+        assert_eq!(agents[1].name, "Other · Alacritty");
     }
 
     #[test]
