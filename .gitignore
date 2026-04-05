@@ -44,3 +44,4 @@ plan.md
 scripts/*.tmp
 nocommit
 nocommit/
+.codex
