@@ -23,7 +23,7 @@ pub struct AgentStatus {
     pub can_focus: bool,
 }
 
-fn status_dir() -> Option<PathBuf> {
+pub fn status_dir() -> Option<PathBuf> {
     dirs_next::home_dir().map(|h| h.join(".agent-monitor"))
 }
 
@@ -127,7 +127,7 @@ fn sort_agents(agents: &mut [AgentStatus]) {
     });
 }
 
-fn read_and_emit(app: &AppHandle, dir: &Path) {
+pub fn read_and_emit(app: &AppHandle, dir: &Path) {
     let agents = read_all(dir);
     crate::tray::update_icon(app, &agents);
     let _ = app.emit("agents-updated", &agents);
