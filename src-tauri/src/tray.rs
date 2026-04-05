@@ -66,43 +66,46 @@ pub fn toggle_popup(app: &AppHandle) {
             let _ = win.hide();
             return;
         }
+        // Already exists but hidden — reposition, show, and refresh state
         position_popup(app, &win);
-        // Move to current workspace via wmctrl (Linux)
-        let _ = std::process::Command::new("wmctrl")
-            .args(["-r", "AgentTray", "-b", "remove,sticky"])
-            .spawn();
-        let _ = std::process::Command::new("wmctrl")
-            .args(["-r", "AgentTray", "-b", "add,sticky"])
-            .spawn();
         let _ = win.show();
         let _ = win.set_focus();
         emit_current_state(app);
-    } else {
-        match WebviewWindowBuilder::new(app, "popup", WebviewUrl::default())
-            .title("AgentTray")
-            .inner_size(300.0, 420.0)
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .visible(false)
-            .resizable(false)
-            .build()
-        {
-            Ok(win) => {
-                position_popup(app, &win);
-                let _ = win.show();
-                let _ = win.set_focus();
-                // Re-emit state so newly created popup gets current agents
-                let app = app.clone();
-                std::thread::spawn(move || {
-                    // Brief delay for webview to initialize
-                    std::thread::sleep(std::time::Duration::from_millis(200));
-                    emit_current_state(&app);
-                });
+        return;
+    }
+
+    // First open: create the popup window
+    match WebviewWindowBuilder::new(app, "popup", WebviewUrl::default())
+        .title("AgentTray")
+        .inner_size(300.0, 420.0)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .visible(false)
+        .build()
+    {
+        Ok(win) => {
+            position_popup(app, &win);
+            #[cfg(target_os = "linux")]
+            {
+                let _ = std::process::Command::new("wmctrl")
+                    .args(["-r", "AgentTray", "-b", "remove,sticky"])
+                    .spawn();
+                let _ = std::process::Command::new("wmctrl")
+                    .args(["-r", "AgentTray", "-b", "add,sticky"])
+                    .spawn();
             }
-            Err(e) => log::error!("Failed to create popup window: {}", e),
+            let _ = win.show();
+            let _ = win.set_focus();
+            let app = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                emit_current_state(&app);
+            });
         }
+        Err(e) => log::error!("Failed to create popup window: {}", e),
     }
 }
 
