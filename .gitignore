@@ -1,0 +1,40 @@
+# Rust
+/target/
+src-tauri/target/
+**/*.rs.bk
+
+# Frontend
+node_modules/
+.svelte-kit/
+build/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Tauri generated
+src-tauri/gen/
+
+# Logs
+*.log
+
+# Claude local settings
+.claude/settings.local.json
+.claude/plans/
+.claude/worktrees/
+
+# Build outputs
+*.bak

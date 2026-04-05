@@ -1,0 +1,287 @@
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalInfo {
+    pub kind: String,
+    pub focus_id: String,
+    pub outer_id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentStatus {
+    pub name: String,
+    pub status: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<TerminalInfo>,
+    pub can_focus: bool,
+}
+
+fn status_dir() -> Option<PathBuf> {
+    dirs_next::home_dir().map(|h| h.join(".agent-monitor"))
+}
+
+fn status_priority(status: &str) -> u8 {
+    match status {
+        "needs-input" => 0,
+        "error" => 1,
+        "working" => 2,
+        "starting" => 3,
+        "idle" => 4,
+        _ => 5, // offline or unknown
+    }
+}
+
+pub fn parse_status_file(path: &Path) -> Option<AgentStatus> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let name = path.file_stem()?.to_str()?.to_string();
+
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        // Check version — skip unknown versions
+        if let Some(v) = val.get("v") {
+            if v.as_u64() != Some(1) {
+                return None;
+            }
+        }
+
+        let status = val.get("status")?.as_str()?.to_string();
+        let mut message = val
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("")
+            .to_string();
+        if message.len() > 500 {
+            message.truncate(500);
+        }
+
+        let terminal: Option<TerminalInfo> = val
+            .get("terminal")
+            .and_then(|t| serde_json::from_value(t.clone()).ok());
+
+        let can_focus = terminal
+            .as_ref()
+            .map(|t| !t.focus_id.is_empty() && t.focus_id != "0")
+            .unwrap_or(false);
+
+        Some(AgentStatus {
+            name,
+            status,
+            message,
+            terminal,
+            can_focus,
+        })
+    } else {
+        // Legacy pipe format: "status|message"
+        let (status, message) = match trimmed.split_once('|') {
+            Some((s, m)) => (s.to_string(), m.to_string()),
+            None => (trimmed.to_string(), String::new()),
+        };
+        Some(AgentStatus {
+            name,
+            status,
+            message,
+            terminal: None,
+            can_focus: false,
+        })
+    }
+}
+
+fn read_all(dir: &Path) -> Vec<AgentStatus> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut agents: Vec<AgentStatus> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("status") {
+                parse_status_file(&path)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    sort_agents(&mut agents);
+    agents
+}
+
+fn sort_agents(agents: &mut [AgentStatus]) {
+    agents.sort_by(|a, b| {
+        let pa = status_priority(&a.status);
+        let pb = status_priority(&b.status);
+        pa.cmp(&pb).then_with(|| a.name.cmp(&b.name))
+    });
+}
+
+fn read_and_emit(app: &AppHandle, dir: &Path) {
+    let agents = read_all(dir);
+    crate::tray::update_icon(app, &agents);
+    let _ = app.emit("agents-updated", &agents);
+}
+
+pub fn watch(app: AppHandle) {
+    let dir = match status_dir() {
+        Some(d) => d,
+        None => {
+            log::error!("Could not determine home directory");
+            return;
+        }
+    };
+
+    // Create directory if it doesn't exist
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        log::error!("Failed to create {:?}: {}", dir, e);
+        return;
+    }
+
+    // Emit initial state
+    read_and_emit(&app, &dir);
+
+    // Set up file watcher
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
+        Ok(w) => w,
+        Err(e) => {
+            log::error!("Failed to create file watcher: {}", e);
+            // Fallback: poll every 400ms
+            log::info!("Falling back to polling mode");
+            loop {
+                std::thread::sleep(Duration::from_millis(400));
+                read_and_emit(&app, &dir);
+            }
+        }
+    };
+
+    if let Err(e) = watcher.watch(&dir, RecursiveMode::NonRecursive) {
+        log::error!("Failed to watch {:?}: {}", dir, e);
+        return;
+    }
+
+    log::info!("Watching {:?} for status changes", dir);
+
+    // Debounce: coalesce events within 50ms
+    let debounce = Duration::from_millis(50);
+    let mut last_emit = Instant::now() - debounce;
+
+    loop {
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Ok(event)) => {
+                match event.kind {
+                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
+                        if last_emit.elapsed() >= debounce {
+                            read_and_emit(&app, &dir);
+                            last_emit = Instant::now();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Err(e)) => log::warn!("Watch error: {}", e),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // Check if we have a pending debounced emit
+                // (event arrived but was debounced, now enough time has passed)
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                log::error!("File watcher channel disconnected");
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn write_temp(content: &str) -> NamedTempFile {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        f
+    }
+
+    #[test]
+    fn parse_valid_json_status() {
+        let json = r#"{"v":1,"status":"working","message":"Running...","terminal":{"kind":"iterm2","focus_id":"w0t0p0:ABC","outer_id":"","label":"iTerm2"}}"#;
+        let f = write_temp(json);
+        let result = parse_status_file(f.path()).unwrap();
+        assert_eq!(result.status, "working");
+        assert_eq!(result.message, "Running...");
+        assert_eq!(result.terminal.as_ref().unwrap().kind, "iterm2");
+        assert!(result.can_focus);
+    }
+
+    #[test]
+    fn parse_legacy_pipe_format() {
+        let f = write_temp("working|Running tests...");
+        let result = parse_status_file(f.path()).unwrap();
+        assert_eq!(result.status, "working");
+        assert_eq!(result.message, "Running tests...");
+        assert!(result.terminal.is_none());
+        assert!(!result.can_focus);
+    }
+
+    #[test]
+    fn parse_empty_file_returns_none() {
+        let f = write_temp("   \n");
+        assert!(parse_status_file(f.path()).is_none());
+    }
+
+    #[test]
+    fn parse_unknown_version_skipped() {
+        let json = r#"{"v":99,"status":"working","message":"hi"}"#;
+        let f = write_temp(json);
+        assert!(parse_status_file(f.path()).is_none());
+    }
+
+    #[test]
+    fn can_focus_false_when_terminal_absent() {
+        let f = write_temp(r#"{"v":1,"status":"idle","message":""}"#);
+        let result = parse_status_file(f.path()).unwrap();
+        assert!(!result.can_focus);
+    }
+
+    #[test]
+    fn can_focus_false_when_focus_id_empty() {
+        let f = write_temp(r#"{"v":1,"status":"idle","message":"","terminal":{"kind":"x11_generic","focus_id":"","outer_id":"","label":"Terminal"}}"#);
+        let result = parse_status_file(f.path()).unwrap();
+        assert!(!result.can_focus);
+    }
+
+    #[test]
+    fn sort_needs_input_before_working() {
+        let mut agents = vec![
+            AgentStatus { name: "b".into(), status: "working".into(), message: "".into(), terminal: None, can_focus: false },
+            AgentStatus { name: "a".into(), status: "needs-input".into(), message: "".into(), terminal: None, can_focus: false },
+            AgentStatus { name: "c".into(), status: "idle".into(), message: "".into(), terminal: None, can_focus: false },
+        ];
+        sort_agents(&mut agents);
+        assert_eq!(agents[0].status, "needs-input");
+        assert_eq!(agents[1].status, "working");
+        assert_eq!(agents[2].status, "idle");
+    }
+
+    #[test]
+    fn message_truncated_at_500_chars() {
+        let long_msg = "x".repeat(600);
+        let json = format!(r#"{{"v":1,"status":"working","message":"{}"}}"#, long_msg);
+        let f = write_temp(&json);
+        let result = parse_status_file(f.path()).unwrap();
+        assert!(result.message.len() <= 500);
+    }
+}

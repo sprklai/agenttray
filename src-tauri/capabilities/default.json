@@ -1,0 +1,16 @@
+{
+  "identifier": "default",
+  "description": "Default permissions for AgentTray",
+  "windows": ["popup"],
+  "permissions": [
+    "core:default",
+    "core:window:default",
+    "core:window:allow-close",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-is-visible",
+    "shell:allow-open",
+    "core:event:default"
+  ]
+}
