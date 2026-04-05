@@ -33,6 +33,7 @@ src-tauri/gen/
 
 # Claude Code
 .claude/
+plan.md
 
 # Build outputs
 *.bak
