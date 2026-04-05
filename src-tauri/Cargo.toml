@@ -1,7 +1,8 @@
 [package]
-name    = "agent-tray"
-version = "0.1.0"
-edition = "2021"
+name        = "agent-tray"
+version     = "0.1.0"
+edition     = "2021"
+description = "System tray monitor for AI coding agents"
 
 [dependencies]
 tauri                     = { version = "2", features = ["tray-icon", "image-png"] }

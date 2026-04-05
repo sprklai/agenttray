@@ -7,6 +7,8 @@ use crate::watcher::{AgentStatus, TerminalInfo};
 struct CpuSnapshot {
     total_ticks: u64,
     when: Instant,
+    /// Last time this process had significant CPU activity.
+    last_active: Option<Instant>,
 }
 
 /// Scans for live Claude CLI processes across platforms.
@@ -15,6 +17,11 @@ pub struct Scanner {
     #[cfg(target_os = "linux")]
     window_cache: HashMap<u32, Option<String>>,
 }
+
+/// Seconds after last activity before we consider the agent "idle"
+/// rather than "needs-input". If Claude was recently working and is
+/// now quiet, it's likely waiting for user approval/input.
+const NEEDS_INPUT_WINDOW_SECS: u64 = 120;
 
 struct ProcInfo {
     pid: u32,
@@ -45,7 +52,31 @@ impl Scanner {
             seen.insert(p.pid);
 
             let cpu_pct = self.cpu_pct(p);
-            let status = if cpu_pct > 2.0 { "working" } else { "idle" };
+            let is_active = cpu_pct > 2.0;
+
+            // Carry forward last_active from previous snapshot
+            let prev_last_active = self.prev.get(&p.pid).and_then(|s| s.last_active);
+            let last_active = if is_active {
+                Some(Instant::now())
+            } else {
+                prev_last_active
+            };
+
+            // Determine status:
+            //  - High CPU → working
+            //  - Low CPU, was recently active → needs-input (waiting for approval)
+            //  - Low CPU, idle for a while → idle
+            let status = if is_active {
+                "working"
+            } else if let Some(t) = last_active {
+                if t.elapsed().as_secs() < NEEDS_INPUT_WINDOW_SECS {
+                    "needs-input"
+                } else {
+                    "idle"
+                }
+            } else {
+                "idle"
+            };
 
             let project = p
                 .cwd
@@ -59,10 +90,10 @@ impl Scanner {
                 format!("{} · {}", project, p.tty_label)
             };
 
-            let message = if status == "working" {
-                format!("Active ({:.0}% CPU)", cpu_pct)
-            } else {
-                p.cwd.display().to_string()
+            let message = match status {
+                "working" => format!("Active ({:.0}% CPU)", cpu_pct),
+                "needs-input" => "Waiting for input".to_string(),
+                _ => p.cwd.display().to_string(),
             };
 
             let terminal = self.terminal_info(p);
@@ -84,6 +115,7 @@ impl Scanner {
                 CpuSnapshot {
                     total_ticks: p.utime + p.stime,
                     when: Instant::now(),
+                    last_active,
                 },
             );
         }

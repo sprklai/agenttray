@@ -17,11 +17,19 @@
     });
 
     const win = getCurrentWindow();
-    const unlistenBlur = await win.onFocusChanged(({ payload: focused }) => {
-      if (!focused) win.hide();
+    let showTime = Date.now();
+
+    // Track when the window becomes visible so we can ignore
+    // immediate blur events (e.g. from global shortcut toggle)
+    const unlistenShow = await listen('tauri://focus', () => {
+      showTime = Date.now();
     });
 
-    return () => { unlisten(); unlistenBlur(); };
+    const unlistenBlur = await win.onFocusChanged(({ payload: focused }) => {
+      if (!focused && Date.now() - showTime > 300) win.hide();
+    });
+
+    return () => { unlisten(); unlistenShow(); unlistenBlur(); };
   });
 
   async function focusAgent(agent: AgentStatus) {

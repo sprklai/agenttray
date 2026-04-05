@@ -76,6 +76,12 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![focus::focus_terminal])
-        .run(tauri::generate_context!())
-        .expect("AgentTray failed to start");
+        .build(tauri::generate_context!())
+        .expect("AgentTray failed to build")
+        .run(|_app, event| {
+            // Prevent exit when the last window is hidden — this is a tray-only app
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                api.prevent_exit();
+            }
+        });
 }

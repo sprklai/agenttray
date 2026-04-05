@@ -27,6 +27,13 @@
     ],
     "resources": [
       "icons/tray-*.png"
-    ]
+    ],
+    "shortDescription": "System tray monitor for AI coding agents",
+    "longDescription": "AgentTray monitors AI coding agents and displays their real-time status via a colored dot in the system tray.",
+    "linux": {
+      "deb": {
+        "desktopTemplate": null
+      }
+    }
   }
 }
