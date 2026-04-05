@@ -44,7 +44,7 @@
     "macOS": {
       "signingIdentity": "Developer ID Application: NSR Technologies Inc. (6BQSGY2B74)",
       "entitlements": "./entitlements.plist",
-      "minimumSystemVersion": "10.13",
+      "minimumSystemVersion": "10.15",
       "providerShortName": "6BQSGY2B74",
       "hardenedRuntime": true
     }

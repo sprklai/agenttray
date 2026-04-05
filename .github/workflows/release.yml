@@ -71,11 +71,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPIMAGE_EXTRACT_AND_RUN: "1"
         with:
-          tagName: app-v__VERSION__
-          releaseName: "AgentTray v__VERSION__"
-          releaseBody: "See assets below to download and install."
-          releaseDraft: false
-          prerelease: false
           args: --bundles deb,rpm,appimage -- --profile ci-release
 
       - name: Upload desktop artifacts
@@ -118,11 +113,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: app-v__VERSION__
-          releaseName: "AgentTray v__VERSION__"
-          releaseBody: "See assets below to download and install."
-          releaseDraft: false
-          prerelease: false
           args: --bundles msi,nsis -- --profile ci-release
 
       - name: Upload desktop artifacts
@@ -191,11 +181,6 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: "6BQSGY2B74"
         with:
-          tagName: app-v__VERSION__
-          releaseName: "AgentTray v__VERSION__"
-          releaseBody: "See assets below to download and install."
-          releaseDraft: false
-          prerelease: false
           args: --target aarch64-apple-darwin --bundles app,dmg -- --profile ci-release
 
       - name: Build desktop (dmg) - x86_64
@@ -207,11 +192,6 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: "6BQSGY2B74"
         with:
-          tagName: app-v__VERSION__
-          releaseName: "AgentTray v__VERSION__"
-          releaseBody: "See assets below to download and install."
-          releaseDraft: false
-          prerelease: false
           args: --target x86_64-apple-darwin --bundles app,dmg -- --profile ci-release
 
       - name: Upload desktop artifacts
