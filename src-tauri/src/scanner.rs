@@ -307,6 +307,7 @@ impl Scanner {
                 focus_id: String::new(),
                 outer_id: String::new(),
                 label: p.tty_label.clone(),
+                window_title: None,
             });
         }
 
@@ -317,13 +318,30 @@ impl Scanner {
             .clone()
             .unwrap_or_default();
 
+        let window_title = if !focus_id.is_empty() {
+            xdotool_get_name(&focus_id)
+        } else {
+            None
+        };
+
         Some(TerminalInfo {
             kind: "x11_generic".to_string(),
             focus_id,
             outer_id: String::new(),
             label: term_label,
+            window_title,
         })
     }
+}
+
+#[cfg(target_os = "linux")]
+fn xdotool_get_name(wid_hex: &str) -> Option<String> {
+    let output = std::process::Command::new("xdotool")
+        .args(["getwindowname", wid_hex])
+        .output()
+        .ok()?;
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if name.is_empty() { None } else { Some(name) }
 }
 
 #[cfg(target_os = "linux")]
@@ -473,6 +491,7 @@ impl Scanner {
             focus_id: term_app.clone(),
             outer_id: String::new(),
             label: term_app,
+            window_title: None,
         })
     }
 }

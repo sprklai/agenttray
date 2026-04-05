@@ -1,13 +1,15 @@
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::image::Image;
 use tauri::webview::WebviewWindowBuilder;
-use tauri::{AppHandle, Manager, WebviewUrl};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl};
 use tauri::tray::TrayIconId;
 
 use crate::watcher::AgentStatus;
 
 static LAST_STATE: Mutex<String> = Mutex::new(String::new());
+static PINNED: AtomicBool = AtomicBool::new(false);
 
 fn aggregate_state(agents: &[AgentStatus]) -> &str {
     if agents.is_empty() {
@@ -60,9 +62,30 @@ pub fn update_icon(app: &AppHandle, agents: &[AgentStatus]) {
     log::debug!("Tray icon updated to: {}", state);
 }
 
+pub fn pin_popup(app: &AppHandle) {
+    PINNED.store(true, Ordering::Relaxed);
+    let _ = app.emit("pinned-changed", true);
+
+    // Show popup if not already visible
+    if let Some(win) = app.get_webview_window("popup") {
+        if !win.is_visible().unwrap_or(false) {
+            position_popup(app, &win);
+            let _ = win.show();
+            let _ = win.set_focus();
+            emit_current_state(app);
+        }
+        return;
+    }
+
+    // First open — delegate to toggle_popup which creates the window
+    toggle_popup(app);
+}
+
 pub fn toggle_popup(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("popup") {
         if win.is_visible().unwrap_or(false) {
+            PINNED.store(false, Ordering::Relaxed);
+            let _ = app.emit("pinned-changed", false);
             let _ = win.hide();
             return;
         }
@@ -114,6 +137,8 @@ fn emit_current_state(app: &AppHandle) {
 }
 
 pub fn hide_popup(app: &AppHandle) {
+    PINNED.store(false, Ordering::Relaxed);
+    let _ = app.emit("pinned-changed", false);
     if let Some(win) = app.get_webview_window("popup") {
         let _ = win.hide();
     }

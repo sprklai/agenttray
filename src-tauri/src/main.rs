@@ -28,10 +28,11 @@ fn main() {
             let h_show = handle.clone();
             let h_hide = handle.clone();
             let show_item = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
+            let pin_item = MenuItem::with_id(app, "pin", "Pin", true, None::<&str>)?;
             let hide_item = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
             let separator = PredefinedMenuItem::separator(app)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &hide_item, &separator, &quit_item])?;
+            let menu = Menu::with_items(app, &[&show_item, &pin_item, &hide_item, &separator, &quit_item])?;
 
             TrayIconBuilder::with_id("main")
                 .icon(tauri::image::Image::from_bytes(include_bytes!(
@@ -40,11 +41,15 @@ fn main() {
                 .tooltip("AgentTray")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .on_menu_event(move |app, event| match event.id.as_ref() {
-                    "show" => tray::toggle_popup(&h_show),
-                    "hide" => tray::hide_popup(&h_hide),
-                    "quit" => app.exit(0),
-                    _ => {}
+                .on_menu_event({
+                    let h_pin = handle.clone();
+                    move |app, event| match event.id.as_ref() {
+                        "show" => tray::toggle_popup(&h_show),
+                        "pin" => tray::pin_popup(&h_pin),
+                        "hide" => tray::hide_popup(&h_hide),
+                        "quit" => app.exit(0),
+                        _ => {}
+                    }
                 })
                 .on_tray_icon_event(move |_tray, event| {
                     // Works on KDE/Windows/macOS — left-click toggles popup directly

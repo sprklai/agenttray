@@ -14,6 +14,8 @@ pub struct TerminalInfo {
     pub focus_id: String,
     pub outer_id: String,
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_title: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

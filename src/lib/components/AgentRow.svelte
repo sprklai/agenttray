@@ -28,8 +28,8 @@
   </div>
 
   <div class="flex flex-col items-end gap-[3px] flex-shrink-0">
-    <span class="text-[10px] text-[#7a7870] opacity-60">
-      {agent.terminal?.label ?? ''}
+    <span class="text-[10px] text-[#7a7870] opacity-60 max-w-[100px] truncate text-right" title={agent.terminal?.window_title ?? agent.terminal?.label ?? ''}>
+      {agent.terminal?.window_title ?? agent.terminal?.label ?? ''}
     </span>
     {#if agent.can_focus}
       <button

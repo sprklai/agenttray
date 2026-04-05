@@ -9,11 +9,16 @@
   import { aggregate } from '$lib/utils';
 
   let agents = $state<AgentStatus[]>([]);
+  let pinned = $state(false);
   let aggregateState = $derived(aggregate(agents));
 
   onMount(async () => {
     const unlisten = await listen<AgentStatus[]>('agents-updated', (event) => {
       agents = event.payload;
+    });
+
+    const unlistenPin = await listen<boolean>('pinned-changed', (event) => {
+      pinned = event.payload;
     });
 
     const win = getCurrentWindow();
@@ -26,10 +31,10 @@
     });
 
     const unlistenBlur = await win.onFocusChanged(({ payload: focused }) => {
-      if (!focused && Date.now() - showTime > 300) win.hide();
+      if (!focused && !pinned && Date.now() - showTime > 300) win.hide();
     });
 
-    return () => { unlisten(); unlistenShow(); unlistenBlur(); };
+    return () => { unlisten(); unlistenPin(); unlistenShow(); unlistenBlur(); };
   });
 
   async function focusAgent(agent: AgentStatus) {

@@ -5,6 +5,7 @@ export interface TerminalInfo {
   focus_id: string;
   outer_id: string;
   label: string;
+  window_title?: string;
 }
 
 export interface AgentStatus {
