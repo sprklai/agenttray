@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=AgentTray
+GenericName=AI Agent Monitor
+Comment=System tray monitor for AI coding agents
+Exec=agent-tray
+Icon=agent-tray
+Terminal=false
+Type=Application
+Categories=Utility;Development;
+Keywords=ai;agent;monitor;tray;coding;
+StartupWMClass=AgentTray

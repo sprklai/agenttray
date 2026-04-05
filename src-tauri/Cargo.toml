@@ -28,3 +28,9 @@ lto           = "thin"
 strip         = true
 codegen-units = 1
 panic         = "abort"
+
+[profile.ci-release]
+inherits      = "release"
+lto           = "thin"
+codegen-units = 16
+opt-level     = "s"

@@ -23,17 +23,30 @@
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
-      "icons/icon.png"
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
     ],
     "resources": [
       "icons/tray-*.png"
     ],
     "shortDescription": "System tray monitor for AI coding agents",
     "longDescription": "AgentTray monitors AI coding agents and displays their real-time status via a colored dot in the system tray.",
+    "category": "Utility",
     "linux": {
       "deb": {
-        "desktopTemplate": null
+        "desktopTemplate": "agenttray.desktop"
+      },
+      "rpm": {
+        "desktopTemplate": "agenttray.desktop"
       }
+    },
+    "macOS": {
+      "signingIdentity": "Developer ID Application: NSR Technologies Inc. (6BQSGY2B74)",
+      "entitlements": "./entitlements.plist",
+      "minimumSystemVersion": "10.13",
+      "providerShortName": "6BQSGY2B74",
+      "hardenedRuntime": true
     }
   }
 }
