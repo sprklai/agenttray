@@ -66,13 +66,25 @@ install_claude() {
     "SessionStart": [
       {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
     ],
+    "SessionEnd": [
+      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+    ],
     "Notification": [
       {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
     ],
     "Stop": [
       {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
     ],
+    "StopFailure": [
+      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+    ],
+    "UserPromptSubmit": [
+      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+    ],
     "PreToolUse": [
+      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+    ],
+    "PostToolUse": [
       {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
     ],
     "SubagentStop": [

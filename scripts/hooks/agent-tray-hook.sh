@@ -52,28 +52,40 @@ STATUS_FILE="${MONITOR_DIR}/${CLI}-${SESSION_SHORT}.status"
 
 build_terminal_json() {
   local kind="unknown"
-  local focus_id="${WINDOWID:-0}:$$"
+  local focus_id=""
+  local outer_id=""
   local label="${TERM_PROGRAM:-Terminal}"
   local window_title=""
 
-  # Detect terminal emulator
-  if [ -n "${TERM_PROGRAM:-}" ]; then
-    case "${TERM_PROGRAM}" in
-      iTerm.app) kind="iterm2" ;;
-      Apple_Terminal) kind="macos_app" ;;
-      WezTerm) kind="wezterm" ;;
-      *) kind="x11_generic" ;;
+  if [[ "$(uname)" == "Darwin" ]]; then
+    # macOS: focuser expects kind="macos_app", focus_id=app name, outer_id=tty
+    kind="macos_app"
+    outer_id=$(tty 2>/dev/null | sed 's|/dev/||' || true)
+    case "${TERM_PROGRAM:-}" in
+      iTerm.app)       focus_id="iTerm2";   label="iTerm2" ;;
+      Apple_Terminal)   focus_id="Terminal";  label="Terminal" ;;
+      WezTerm)          focus_id="WezTerm";   label="WezTerm" ;;
+      *)                focus_id="${TERM_PROGRAM:-}"; label="${TERM_PROGRAM:-Terminal}" ;;
     esac
-  elif [ -n "${KITTY_PID:-}" ]; then
-    kind="x11_generic"; label="Kitty"
-  elif [ -n "${ALACRITTY_SOCKET:-}" ]; then
-    kind="x11_generic"; label="Alacritty"
-  elif [ -n "${WINDOWID:-}" ]; then
-    kind="x11_generic"
+  else
+    # Linux/other: focuser expects kind="x11_generic", focus_id=X11 window ID (hex)
+    # Scanner produces hex format (0x...) so we must match it for dedup
+    if [ -n "${WINDOWID:-}" ]; then
+      focus_id=$(printf '0x%x' "$WINDOWID")
+    fi
+    if [ -n "${TERM_PROGRAM:-}" ]; then
+      kind="x11_generic"
+    elif [ -n "${KITTY_PID:-}" ]; then
+      kind="x11_generic"; label="Kitty"
+    elif [ -n "${ALACRITTY_SOCKET:-}" ]; then
+      kind="x11_generic"; label="Alacritty"
+    elif [ -n "${WINDOWID:-}" ]; then
+      kind="x11_generic"
+    fi
   fi
 
-  printf '{"kind":"%s","focus_id":"%s","outer_id":"","label":"%s","window_title":"%s"}' \
-    "${kind}" "${focus_id}" "${label}" "${window_title}"
+  printf '{"kind":"%s","focus_id":"%s","outer_id":"%s","label":"%s","window_title":"%s"}' \
+    "${kind}" "${focus_id}" "${outer_id}" "${label}" "${window_title}"
 }
 
 TERMINAL_JSON=$(build_terminal_json)
@@ -134,11 +146,10 @@ if [ ! -t 0 ]; then
   INPUT=$(cat)
 fi
 
-EVENT=$(json_field "$INPUT" "event" 2>/dev/null || true)
-# Some CLIs use "type" instead of "event"
+# Claude Code uses "hook_event_name"; other CLIs may use "event" or "type"
+EVENT=$(json_field "$INPUT" "hook_event_name" 2>/dev/null || true)
+[ -z "$EVENT" ] && EVENT=$(json_field "$INPUT" "event" 2>/dev/null || true)
 [ -z "$EVENT" ] && EVENT=$(json_field "$INPUT" "type" 2>/dev/null || true)
-
-# Claude Code uses hook_name for the event type
 [ -z "$EVENT" ] && EVENT=$(json_field "$INPUT" "hook_name" 2>/dev/null || true)
 
 # Get matcher / subtype for filtering
@@ -173,10 +184,13 @@ map_claude_code() {
       esac
       ;;
     Stop)
-      write_status "idle" "Finished responding" "$EVENT"
+      write_status "needs-input" "Waiting for input" "$EVENT"
       ;;
     StopFailure)
       write_status "error" "API error" "$EVENT"
+      ;;
+    UserPromptSubmit)
+      write_status "working" "Processing prompt" "$EVENT"
       ;;
     PreToolUse)
       case "$MATCHER" in
@@ -185,6 +199,9 @@ map_claude_code() {
         Agent)  write_status "working" "Running subagent..." "$EVENT" "$MATCHER" ;;
         *)      write_status "working" "Using ${MATCHER}..." "$EVENT" "$MATCHER" ;;
       esac
+      ;;
+    PostToolUse)
+      write_status "working" "Tool completed" "$EVENT" "$MATCHER"
       ;;
     SubagentStop)
       write_status "working" "Subagent completed" "$EVENT"

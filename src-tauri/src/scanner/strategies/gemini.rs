@@ -28,20 +28,6 @@ impl CliStrategy for GeminiStrategy {
                 message: format!("Active ({:.0}% CPU)", cpu_pct),
                 confidence: 0.5,
             }
-        } else if let Some(t) = info.last_active {
-            if t.elapsed().as_secs() < 120 {
-                DetectedState {
-                    status: "needs-input".to_string(),
-                    message: "Waiting for input".to_string(),
-                    confidence: 0.4,
-                }
-            } else {
-                DetectedState {
-                    status: "idle".to_string(),
-                    message: info.cwd.display().to_string(),
-                    confidence: 0.3,
-                }
-            }
         } else {
             DetectedState {
                 status: "idle".to_string(),

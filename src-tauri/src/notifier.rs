@@ -108,18 +108,26 @@ fn play_system_beep() {
 fn platform_beep() -> Result<(), String> {
     use std::process::Command;
 
-    let sounds = [
-        "/usr/share/sounds/freedesktop/stereo/bell.oga",
-        "/usr/share/sounds/freedesktop/stereo/complete.oga",
-    ];
-    for path in &sounds {
-        if std::path::Path::new(path).exists() {
-            if Command::new("paplay").arg(path).output().is_ok() {
-                return Ok(());
-            }
-        }
+    // Try freedesktop sound theme (uses user's configured sound theme)
+    if Command::new("canberra-gtk-play")
+        .args(["--id", "bell"])
+        .output()
+        .is_ok()
+    {
+        return Ok(());
     }
-    // Last resort
+
+    // Try paplay with XDG sound lookup
+    if Command::new("paplay")
+        .args(["--property", "media.role=event"])
+        .arg("/usr/share/sounds/freedesktop/stereo/bell.oga")
+        .output()
+        .is_ok()
+    {
+        return Ok(());
+    }
+
+    // Last resort: terminal bell
     Command::new("sh")
         .args(["-c", "printf '\\a'"])
         .output()
@@ -130,16 +138,19 @@ fn platform_beep() -> Result<(), String> {
 #[cfg(target_os = "macos")]
 fn platform_beep() -> Result<(), String> {
     use std::process::Command;
-    Command::new("afplay")
-        .arg("/System/Library/Sounds/Glass.aiff")
+    // Use AppleScript beep — plays the user's configured alert sound
+    // without hardcoding any file path
+    Command::new("osascript")
+        .args(["-e", "beep"])
         .output()
         .map(|_| ())
-        .map_err(|e| format!("afplay failed: {}", e))
+        .map_err(|e| format!("osascript beep failed: {}", e))
 }
 
 #[cfg(target_os = "windows")]
 fn platform_beep() -> Result<(), String> {
     use std::process::Command;
+    // Uses .NET system sounds — plays the user's configured exclamation sound
     Command::new("powershell")
         .args(["-c", "[System.Media.SystemSounds]::Exclamation.Play()"])
         .output()

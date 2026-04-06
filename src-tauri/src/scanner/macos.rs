@@ -114,14 +114,10 @@ pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalIn
         cur = parts[0].trim().parse().unwrap_or(0);
     }
 
-    if term_app.is_empty() {
-        term_app = p.tty_label.clone();
-    }
-
     // Use TTY-based AppleScript for precise window title (works without
     // Accessibility permissions), then fall back to System Events.
     let tty = &p.tty_label;
-    let window_title = if !term_app.is_empty() && term_app != *tty {
+    let window_title = if !term_app.is_empty() {
         cache
             .entry(term_pid)
             .or_insert_with(|| {
@@ -133,11 +129,19 @@ pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalIn
         None
     };
 
+    // Use tty_label as display label when no known terminal app found,
+    // but leave focus_id empty so the focuser won't try to activate a tty name.
+    let label = if term_app.is_empty() {
+        p.tty_label.clone()
+    } else {
+        term_app.clone()
+    };
+
     Some(TerminalInfo {
         kind: "macos_app".to_string(),
-        focus_id: term_app.clone(),
+        focus_id: term_app,
         outer_id: tty.clone(), // TTY for tab-specific focus
-        label: term_app,
+        label,
         window_title,
     })
 }

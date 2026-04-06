@@ -227,12 +227,38 @@ fn count_children(pid: u32, excluded: &[&str]) -> u32 {
 }
 
 #[cfg(target_os = "macos")]
-fn count_children(pid: u32, _excluded: &[&str]) -> u32 {
-    std::process::Command::new("pgrep")
+fn count_children(pid: u32, excluded: &[&str]) -> u32 {
+    let output = match std::process::Command::new("pgrep")
         .args(["-P", &pid.to_string()])
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines().count() as u32)
-        .unwrap_or(0)
+    {
+        Ok(o) => o,
+        Err(_) => return 0,
+    };
+
+    let child_pids = String::from_utf8_lossy(&output.stdout);
+
+    if excluded.is_empty() {
+        return child_pids.lines().filter(|l| !l.trim().is_empty()).count() as u32;
+    }
+
+    child_pids
+        .lines()
+        .filter(|pid_str| {
+            let pid_str = pid_str.trim();
+            if pid_str.is_empty() {
+                return false;
+            }
+            let Ok(ps_out) = std::process::Command::new("ps")
+                .args(["-o", "command=", "-p", pid_str])
+                .output()
+            else {
+                return true;
+            };
+            let cmdline = String::from_utf8_lossy(&ps_out.stdout);
+            !excluded.iter().any(|exc| cmdline.contains(exc))
+        })
+        .count() as u32
 }
 
 #[cfg(target_os = "windows")]

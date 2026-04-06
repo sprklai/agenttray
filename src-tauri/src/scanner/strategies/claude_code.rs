@@ -3,9 +3,6 @@ use crate::scanner::ProcInfo;
 
 pub struct ClaudeCodeStrategy;
 
-/// Seconds after last high-CPU burst before we fall back to "idle".
-const NEEDS_INPUT_WINDOW_SECS: u64 = 120;
-
 impl CliStrategy for ClaudeCodeStrategy {
     fn process_names(&self) -> &[&str] {
         &["claude"]
@@ -42,20 +39,6 @@ impl CliStrategy for ClaudeCodeStrategy {
                 status: "working".to_string(),
                 message: format!("Active ({:.0}% CPU)", cpu_pct),
                 confidence: 0.5,
-            }
-        } else if let Some(t) = info.last_active {
-            if t.elapsed().as_secs() < NEEDS_INPUT_WINDOW_SECS {
-                DetectedState {
-                    status: "needs-input".to_string(),
-                    message: "Waiting for input".to_string(),
-                    confidence: 0.4,
-                }
-            } else {
-                DetectedState {
-                    status: "idle".to_string(),
-                    message: info.cwd.display().to_string(),
-                    confidence: 0.4,
-                }
             }
         } else {
             DetectedState {
@@ -144,11 +127,11 @@ mod tests {
     }
 
     #[test]
-    fn low_cpu_recently_active_means_needs_input() {
+    fn low_cpu_recently_active_means_idle() {
         let strategy = ClaudeCodeStrategy;
         let info = make_info(None, Some(Instant::now()));
         let state = strategy.detect_state(&info, 0.5, 0);
-        assert_eq!(state.status, "needs-input");
+        assert_eq!(state.status, "idle");
     }
 
     #[test]
