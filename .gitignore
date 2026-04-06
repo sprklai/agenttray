@@ -32,7 +32,8 @@ src-tauri/gen/
 *.log
 
 # Claude Code
-.claude/
+.claude/*
+!.claude/commands/
 plan.md
 
 # Build outputs
