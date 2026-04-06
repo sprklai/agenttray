@@ -4,7 +4,18 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOOK_SCRIPT="${SCRIPT_DIR}/agent-tray-hook.sh"
+HOOK_SCRIPT_SRC="${SCRIPT_DIR}/agent-tray-hook.sh"
+HOOK_SCRIPT_PS1_SRC="${SCRIPT_DIR}/agent-tray-hook.ps1"
+
+# Stable install location (not tied to source repo)
+HOOK_INSTALL_DIR="${HOME}/.agent-monitor/hooks"
+
+# ── Platform Detection ───────────────────────────────────────
+
+PLATFORM="unix"
+case "$(uname -s 2>/dev/null || echo Unknown)" in
+  MINGW*|MSYS*|CYGWIN*) PLATFORM="windows" ;;
+esac
 
 # ── Args ──────────────────────────────────────────────────────
 
@@ -21,8 +32,8 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ ! -x "$HOOK_SCRIPT" ]; then
-  echo "ERROR: Hook script not found or not executable: $HOOK_SCRIPT" >&2
+if [ ! -f "$HOOK_SCRIPT_SRC" ]; then
+  echo "ERROR: Hook script not found: $HOOK_SCRIPT_SRC" >&2
   exit 1
 fi
 
@@ -46,6 +57,41 @@ atomic_write() {
   mv -f "${file}.tmp" "$file"
 }
 
+# Deploy hook script(s) to ~/.agent-monitor/hooks/
+deploy_hook_scripts() {
+  mkdir -p "$HOOK_INSTALL_DIR"
+  cp -f "$HOOK_SCRIPT_SRC" "${HOOK_INSTALL_DIR}/agent-tray-hook.sh"
+  chmod +x "${HOOK_INSTALL_DIR}/agent-tray-hook.sh"
+  echo "  -> Deployed hook script to ${HOOK_INSTALL_DIR}/agent-tray-hook.sh"
+
+  # On Windows, also deploy the PowerShell version
+  if [ "$PLATFORM" = "windows" ] && [ -f "$HOOK_SCRIPT_PS1_SRC" ]; then
+    cp -f "$HOOK_SCRIPT_PS1_SRC" "${HOOK_INSTALL_DIR}/agent-tray-hook.ps1"
+    echo "  -> Deployed PowerShell hook to ${HOOK_INSTALL_DIR}/agent-tray-hook.ps1"
+  fi
+}
+
+# Resolve the hook command for settings.json
+# On Windows (Git Bash), use bash + Windows-style path
+# On Unix, use the deployed script directly
+get_hook_cmd() {
+  local installed="${HOOK_INSTALL_DIR}/agent-tray-hook.sh"
+  if [ "$PLATFORM" = "windows" ]; then
+    local win_path
+    if command -v cygpath >/dev/null 2>&1; then
+      win_path=$(cygpath -w "$installed")
+    else
+      # Fallback: convert /c/Users/... to C:\Users\...
+      win_path=$(echo "$installed" | sed 's|^/\([a-zA-Z]\)/|\1:\\|;s|/|\\|g')
+    fi
+    echo "bash \"${win_path}\""
+  else
+    echo "$installed"
+  fi
+}
+
+HOOK_CMD=""  # set after deploy
+
 # ── Claude Code ───────────────────────────────────────────────
 
 CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
@@ -58,55 +104,64 @@ install_claude() {
   local current
   current=$(cat "$CLAUDE_SETTINGS")
 
-  # Build hook entries for all relevant events
+  # Claude Code requires the matcher + hooks array format:
+  # {"matcher": "", "hooks": [{"type": "command", "command": "...", "tag": "..."}]}
   local hook_json
   hook_json=$(cat <<EOJSON
 {
   "hooks": {
     "SessionStart": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"matcher": "", "hooks": [{"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}]}
     ],
     "SessionEnd": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"matcher": "", "hooks": [{"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}]}
     ],
     "Notification": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"matcher": "", "hooks": [{"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}]}
     ],
     "Stop": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"matcher": "", "hooks": [{"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}]}
     ],
     "StopFailure": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"matcher": "", "hooks": [{"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}]}
     ],
     "UserPromptSubmit": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"matcher": "", "hooks": [{"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}]}
     ],
     "PreToolUse": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"matcher": "", "hooks": [{"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}]}
     ],
     "PostToolUse": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"matcher": "", "hooks": [{"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}]}
     ],
     "SubagentStop": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"matcher": "", "hooks": [{"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}]}
     ]
   }
 }
 EOJSON
 )
 
-  # Merge: for each event, append our hook entries (avoiding duplicates)
+  # Merge: handle both new matcher+hooks format and legacy flat entries
   local merged
   merged=$(printf '%s' "$current" | jq --argjson new "$hook_json" '
-    # Ensure .hooks exists
     .hooks //= {} |
-    # For each event in new hooks, merge entries
     reduce ($new.hooks | to_entries[]) as $entry (
       .;
       .hooks[$entry.key] //= [] |
-      # Remove any existing agent-tray hooks first
-      .hooks[$entry.key] = [.hooks[$entry.key][] | select(.tag != "agent-tray")] |
-      # Append new entries
+      # Remove existing agent-tray entries (handles both formats)
+      .hooks[$entry.key] = [
+        .hooks[$entry.key][] |
+        if .hooks then
+          # New format: filter agent-tray from nested hooks array
+          .hooks = [.hooks[] | select(.tag != "agent-tray")] |
+          select(.hooks | length > 0)
+        else
+          # Legacy flat format: filter by tag directly
+          select(.tag != "agent-tray")
+        end
+      ] |
+      # Append new matcher group
       .hooks[$entry.key] += $entry.value
     )
   ')
@@ -129,7 +184,17 @@ uninstall_claude() {
   cleaned=$(printf '%s' "$current" | jq '
     if .hooks then
       .hooks |= with_entries(
-        .value = [.value[] | select(.tag != "agent-tray")] |
+        .value = [
+          .value[] |
+          if .hooks then
+            # New format: filter agent-tray from nested hooks array
+            .hooks = [.hooks[] | select(.tag != "agent-tray")] |
+            select(.hooks | length > 0)
+          else
+            # Legacy flat format: filter by tag directly
+            select(.tag != "agent-tray")
+          end
+        ] |
         select(.value | length > 0)
       ) |
       if (.hooks | length) == 0 then del(.hooks) else . end
@@ -156,19 +221,19 @@ install_codex() {
 {
   "hooks": {
     "SessionStart": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}
     ],
     "PreToolUse": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}
     ],
     "PostToolUse": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}
     ],
     "Stop": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}
     ],
     "UserPromptSubmit": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}
     ]
   }
 }
@@ -231,28 +296,28 @@ install_gemini() {
 {
   "hooks": {
     "SessionStart": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}
     ],
     "SessionEnd": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}
     ],
     "BeforeAgent": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}
     ],
     "AfterAgent": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}
     ],
     "BeforeTool": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}
     ],
     "AfterTool": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}
     ],
     "Notification": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}
     ],
     "PreCompress": [
-      {"type": "command", "command": "${HOOK_SCRIPT}", "tag": "${CLAUDE_HOOK_TAG}"}
+      {"type": "command", "command": "${HOOK_CMD}", "tag": "${CLAUDE_HOOK_TAG}"}
     ]
   }
 }
@@ -317,6 +382,12 @@ run_for() {
     esac
   fi
 }
+
+# Deploy hook scripts before installing (skip for uninstall)
+if ! $UNINSTALL; then
+  deploy_hook_scripts
+  HOOK_CMD=$(get_hook_cmd)
+fi
 
 case "$TARGET" in
   claude) run_for claude ;;

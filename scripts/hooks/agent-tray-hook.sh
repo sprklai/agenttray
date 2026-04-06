@@ -19,8 +19,10 @@ detect_cli() {
     echo "codex"
   else
     # Fallback: check parent process name
-    local parent
-    parent=$(ps -o comm= -p "${PPID}" 2>/dev/null || true)
+    local parent=""
+    if command -v ps >/dev/null 2>&1; then
+      parent=$(ps -o comm= -p "${PPID}" 2>/dev/null || true)
+    fi
     case "${parent}" in
       *claude*) echo "claude-code" ;;
       *codex*)  echo "codex" ;;
@@ -57,7 +59,10 @@ build_terminal_json() {
   local label="${TERM_PROGRAM:-Terminal}"
   local window_title=""
 
-  if [[ "$(uname)" == "Darwin" ]]; then
+  local uname_s
+  uname_s="$(uname -s 2>/dev/null || echo Unknown)"
+
+  if [[ "$uname_s" == "Darwin" ]]; then
     # macOS: focuser expects kind="macos_app", focus_id=app name, outer_id=tty
     kind="macos_app"
     outer_id=$(tty 2>/dev/null | sed 's|/dev/||' || true)
@@ -67,6 +72,21 @@ build_terminal_json() {
       WezTerm)          focus_id="WezTerm";   label="WezTerm" ;;
       *)                focus_id="${TERM_PROGRAM:-}"; label="${TERM_PROGRAM:-Terminal}" ;;
     esac
+  elif [[ "$uname_s" == MINGW* ]] || [[ "$uname_s" == MSYS* ]] || [[ "$uname_s" == CYGWIN* ]]; then
+    # Windows via Git Bash / MSYS2 / Cygwin
+    kind="windows_native"
+    if [ -n "${PPID:-}" ]; then
+      focus_id="${PPID}"
+    fi
+    if [ -n "${WT_SESSION:-}" ]; then
+      label="Windows Terminal"
+    elif [ -n "${ConEmuPID:-}" ]; then
+      label="ConEmu"
+    elif [ -n "${TERM_PROGRAM:-}" ]; then
+      label="${TERM_PROGRAM}"
+    else
+      label="Git Bash"
+    fi
   else
     # Linux/other: focuser expects kind="x11_generic", focus_id=X11 window ID (hex)
     # Scanner produces hex format (0x...) so we must match it for dedup

@@ -258,28 +258,50 @@ pub fn get_agents() -> Vec<AgentStatus> {
 /// Set `uninstall` to true to remove hooks instead.
 #[tauri::command]
 pub fn install_hooks(cli: String, uninstall: bool) -> Result<String, String> {
-    let script = std::env::current_exe()
+    let base_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .map(|dir| {
+        .and_then(|dir| {
             // In dev mode, scripts are relative to the project root
             // In production, they're bundled as resources
-            let dev_path = dir
-                .ancestors()
+            dir.ancestors()
                 .find(|d| d.join("scripts").exists())
-                .map(|d| d.join("scripts/hooks/install-hooks.sh"));
-            dev_path.unwrap_or_else(|| dir.join("scripts/hooks/install-hooks.sh"))
+                .map(|d| d.to_path_buf())
+                .or_else(|| Some(dir))
         })
-        .ok_or_else(|| "Could not locate install-hooks.sh".to_string())?;
+        .ok_or_else(|| "Could not locate scripts directory".to_string())?;
+
+    // On Windows, prefer PowerShell installer; fall back to bash
+    let (program, script) = if cfg!(target_os = "windows") {
+        let ps1 = base_dir.join("scripts/hooks/install-hooks.ps1");
+        if ps1.exists() {
+            ("powershell".to_string(), ps1)
+        } else {
+            let sh = base_dir.join("scripts/hooks/install-hooks.sh");
+            ("bash".to_string(), sh)
+        }
+    } else {
+        let sh = base_dir.join("scripts/hooks/install-hooks.sh");
+        ("bash".to_string(), sh)
+    };
 
     if !script.exists() {
         return Err(format!("Hook installer not found at: {}", script.display()));
     }
 
-    let mut cmd = std::process::Command::new("bash");
-    cmd.arg(&script).arg(&cli);
-    if uninstall {
-        cmd.arg("--uninstall");
+    let mut cmd = std::process::Command::new(&program);
+    if program == "powershell" {
+        cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
+        cmd.arg(&script);
+        cmd.args(["-Target", &cli]);
+        if uninstall {
+            cmd.arg("-Uninstall");
+        }
+    } else {
+        cmd.arg(&script).arg(&cli);
+        if uninstall {
+            cmd.arg("--uninstall");
+        }
     }
 
     let output = cmd.output().map_err(|e| format!("Failed to run installer: {}", e))?;
