@@ -1,16 +1,17 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::watcher::TerminalInfo;
 use super::{known_terminal, ProcInfo, WindowCache};
-use super::strategies::CliStrategy;
+use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
 
 /// Find CLI processes matching any registered strategy.
 pub fn find_cli_processes<'a>(
     strategies: &'a [Box<dyn CliStrategy>],
 ) -> Vec<(ProcInfo, &'a dyn CliStrategy)> {
-    // Build wmic filter for all strategy process names
+    // Build wmic filter for all strategy process names + script runtimes
     let all_names: Vec<&str> = strategies.iter()
         .flat_map(|s| s.process_names().iter().copied())
+        .chain(SCRIPT_RUNTIMES.iter().copied())
         .collect();
     if all_names.is_empty() {
         return Vec::new();
@@ -50,11 +51,34 @@ pub fn find_cli_processes<'a>(
         let cmd_line = cols[1];
         let proc_name = cols[2].trim().strip_suffix(".exe").unwrap_or(cols[2].trim());
 
-        let strategy = match strategies.iter().find(|s| {
+        // Phase 1: Direct process name match (native binaries)
+        let strategy = strategies.iter().find(|s| {
             s.process_names().iter().any(|n| *n == proc_name)
-        }) {
+        });
+
+        // Phase 2: If process is a script runtime, check CommandLine for script names
+        let strategy = match strategy {
             Some(s) => s.as_ref(),
-            None => continue,
+            None => {
+                if !SCRIPT_RUNTIMES.iter().any(|r| *r == proc_name) {
+                    continue;
+                }
+                match cmd_line.split_whitespace().skip(1).find_map(|arg| {
+                    if arg.starts_with('-') {
+                        return None;
+                    }
+                    let arg_name = Path::new(arg)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("");
+                    strategies.iter().find(|s| {
+                        s.script_names().iter().any(|n| *n == arg_name)
+                    })
+                }) {
+                    Some(s) => s.as_ref(),
+                    None => continue,
+                }
+            }
         };
 
         if strategy.excluded_substrings().iter().any(|exc| cmd_line.contains(exc)) {

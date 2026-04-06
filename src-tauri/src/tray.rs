@@ -5,6 +5,7 @@ use tauri::image::Image;
 use tauri::webview::WebviewWindowBuilder;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl};
 use tauri::tray::TrayIconId;
+use tauri::webview::Color;
 
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
@@ -104,9 +105,10 @@ pub fn toggle_popup(app: &AppHandle) {
     // First open: create the popup window
     match WebviewWindowBuilder::new(app, "popup", WebviewUrl::default())
         .title("AgentTray")
-        .inner_size(400.0, 420.0) // Must match frontend: 392px content + 4px margin each side
+        .inner_size(400.0, 120.0) // Minimal; frontend auto-resizes to fit content
         .decorations(false)
         .transparent(true)
+        .background_color(Color(0, 0, 0, 0)) // Transparent WebView2 on Windows
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
@@ -204,6 +206,7 @@ mod tests {
             session_id: None,
             hook_event: None,
             hook_matcher: None,
+            mtime: None,
         }
     }
 

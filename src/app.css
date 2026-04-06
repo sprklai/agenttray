@@ -40,6 +40,13 @@ html, body {
   background-size: 128px 128px;
 }
 
+/* Fallback for webviews without backdrop-filter support */
+@supports not (backdrop-filter: blur(1px)) {
+  .glass-panel {
+    background: rgba(30, 30, 30, 0.95);
+  }
+}
+
 /* Glass scrollbar */
 .glass-scroll::-webkit-scrollbar {
   width: 5px;

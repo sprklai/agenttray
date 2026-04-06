@@ -3,6 +3,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { LogicalSize } from '@tauri-apps/api/dpi';
   import type { AgentStatus } from '$lib/types';
   import AgentRow from '$lib/components/AgentRow.svelte';
   import AggregatePill from '$lib/components/AggregatePill.svelte';
@@ -10,11 +11,31 @@
   import Pin from '@lucide/svelte/icons/pin';
   import PinOff from '@lucide/svelte/icons/pin-off';
 
+  // Dynamic window height constants (logical pixels)
+  const HEADER_H = 36;
+  const ROW_H = 44;
+  const LIST_PAD = 8;
+  const OUTER_MARGIN = 8; // 4px margin × 2
+  const PANEL_BORDER = 2; // 1px × 2
+  const EMPTY_H = 70;
+  const MAX_VISIBLE = 8;
+  const WIN_W = 400;
+  const MAX_LIST_H = MAX_VISIBLE * ROW_H + LIST_PAD;
+
   let agents = $state<AgentStatus[]>([]);
   let pinned = $state(false);
   let statusDir = $state('~/.agent-monitor');
   let ipcError = $state('');
   let aggregateState = $derived(aggregate(agents));
+
+  // Auto-resize window to fit agent count
+  $effect(() => {
+    const n = agents.length;
+    const h = n === 0
+      ? HEADER_H + EMPTY_H + OUTER_MARGIN + PANEL_BORDER
+      : HEADER_H + Math.min(n, MAX_VISIBLE) * ROW_H + LIST_PAD + OUTER_MARGIN + PANEL_BORDER;
+    getCurrentWindow().setSize(new LogicalSize(WIN_W, h));
+  });
 
   onMount(() => {
     const cleanups: Array<() => void> = [];
@@ -141,7 +162,7 @@
       No agents detected.<br/>See {statusDir}
     </p>
   {:else}
-    <ul class="py-1 m-0 p-0 glass-scroll" style="max-height: 360px; overflow-y: auto;">
+    <ul class="py-1 m-0 p-0 glass-scroll" style="max-height: {MAX_LIST_H}px; overflow-y: auto;">
       {#each agents as agent (agent.id)}
         <AgentRow {agent} onFocus={() => focusAgent(agent)} />
       {/each}

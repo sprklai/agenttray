@@ -212,6 +212,7 @@ mod tests {
             session_id: None,
             hook_event: None,
             hook_matcher: None,
+            mtime: None,
         }
     }
 

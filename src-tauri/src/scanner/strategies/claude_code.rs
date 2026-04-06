@@ -1,7 +1,19 @@
-use super::{CliStrategy, DetectedState};
+use super::{CliStrategy, DetectedState, TitlePattern};
 use crate::scanner::ProcInfo;
 
 pub struct ClaudeCodeStrategy;
+
+/// Claude Code title patterns. Claude Code sets terminal title via OSC but
+/// does not currently use dynamic status indicators (no ✋/✦ icons).
+/// These patterns match keywords that may appear in the title text.
+const TITLE_PATTERNS: &[TitlePattern] = &[
+    TitlePattern { pattern: "waiting", status: "needs-input", confidence: 0.9 },
+    TitlePattern { pattern: "approve", status: "needs-input", confidence: 0.9 },
+    TitlePattern { pattern: "allow", status: "needs-input", confidence: 0.9 },
+    TitlePattern { pattern: "running", status: "working", confidence: 0.9 },
+    TitlePattern { pattern: "editing", status: "working", confidence: 0.9 },
+    TitlePattern { pattern: "thinking", status: "working", confidence: 0.9 },
+];
 
 impl CliStrategy for ClaudeCodeStrategy {
     fn process_names(&self) -> &[&str] {
@@ -14,9 +26,8 @@ impl CliStrategy for ClaudeCodeStrategy {
 
     fn detect_state(&self, info: &ProcInfo, cpu_pct: f64, child_count: u32) -> DetectedState {
         // Signal 1: Window title patterns (highest confidence).
-        // Claude Code sets terminal title; some terminals expose it.
         if let Some(ref title) = info.window_title {
-            if let Some(state) = detect_from_title(title) {
+            if let Some(state) = super::detect_from_title(title, self.title_patterns()) {
                 return state;
             }
         }
@@ -32,9 +43,7 @@ impl CliStrategy for ClaudeCodeStrategy {
         }
 
         // Signal 3: CPU heuristic (fallback).
-        let is_active = cpu_pct > 2.0;
-
-        if is_active {
+        if cpu_pct > 2.0 {
             DetectedState {
                 status: "working".to_string(),
                 message: format!("Active ({:.0}% CPU)", cpu_pct),
@@ -56,45 +65,9 @@ impl CliStrategy for ClaudeCodeStrategy {
     fn cli_name(&self) -> &str {
         "claude-code"
     }
-}
 
-/// Try to infer state from the terminal window title.
-/// Claude Code updates the terminal title during operation.
-fn detect_from_title(title: &str) -> Option<DetectedState> {
-    let lower = title.to_lowercase();
-
-    // Claude Code shows "Claude Code" or task description in title.
-    // When waiting for input, the prompt indicator appears.
-    // When working, tool names or "thinking" may appear.
-
-    // Patterns observed: title often contains the prompt "❯" when idle/waiting
-    if lower.contains("waiting") || lower.contains("approve") || lower.contains("allow") {
-        return Some(DetectedState {
-            status: "needs-input".to_string(),
-            message: truncate(title, 120),
-            confidence: 0.9,
-        });
-    }
-
-    if lower.contains("running") || lower.contains("editing") || lower.contains("thinking") {
-        return Some(DetectedState {
-            status: "working".to_string(),
-            message: truncate(title, 120),
-            confidence: 0.9,
-        });
-    }
-
-    None
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        match s.char_indices().nth(max) {
-            Some((idx, _)) => s[..idx].to_string(),
-            None => s.to_string(),
-        }
+    fn title_patterns(&self) -> &[TitlePattern] {
+        TITLE_PATTERNS
     }
 }
 

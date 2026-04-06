@@ -148,6 +148,7 @@ impl Scanner {
                 session_id: None,
                 hook_event: None,
                 hook_matcher: None,
+                mtime: None,
             };
 
             // Dedup by tty: keep the higher-priority (lower numeric) status

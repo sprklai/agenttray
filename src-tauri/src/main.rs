@@ -2,6 +2,7 @@
 
 mod focus;
 mod focusers;
+mod heuristics;
 mod notifier;
 mod scanner;
 mod tray;

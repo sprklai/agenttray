@@ -2,7 +2,7 @@
 name        = "agent-tray"
 version     = "0.1.4"
 edition     = "2021"
-description = "System tray monitor for AI coding agents"
+description = "Agent Tray - System tray monitor for AI coding agents"
 
 [dependencies]
 tauri                     = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }

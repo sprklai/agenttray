@@ -49,6 +49,9 @@ pub struct AgentStatus {
     /// Hook matcher/subtype (e.g. "permission_prompt", "Bash").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hook_matcher: Option<String>,
+    /// File modification time (for hook freshness checks). Internal only.
+    #[serde(skip)]
+    pub mtime: Option<std::time::SystemTime>,
 }
 
 pub fn status_dir() -> Option<PathBuf> {
@@ -124,6 +127,7 @@ pub fn parse_status_file(path: &Path) -> Option<AgentStatus> {
             session_id,
             hook_event,
             hook_matcher,
+            mtime: None, // populated by read_all from file metadata
         })
     } else {
         // Legacy pipe format: "status|message"
@@ -145,6 +149,7 @@ pub fn parse_status_file(path: &Path) -> Option<AgentStatus> {
             session_id: None,
             hook_event: None,
             hook_matcher: None,
+            mtime: None, // populated by read_all from file metadata
         })
     }
 }
@@ -168,16 +173,19 @@ fn read_all(dir: &Path) -> Vec<AgentStatus> {
                 return None;
             }
 
-            let agent = parse_status_file(&path)?;
+            let mut agent = parse_status_file(&path)?;
+
+            // Populate mtime from file metadata for hook freshness checks
+            let file_mtime = std::fs::metadata(&path).ok()
+                .and_then(|m| m.modified().ok());
+            agent.mtime = file_mtime;
 
             // Filter stale status files: if the file hasn't been written to
             // in STALE_TTL, the session likely exited without sending
             // SessionEnd.  The scanner will still show live processes.
-            if let Ok(meta) = std::fs::metadata(&path) {
-                if let Ok(mtime) = meta.modified() {
-                    if now.duration_since(mtime).unwrap_or_default() > STALE_TTL {
-                        return None;
-                    }
+            if let Some(mtime) = file_mtime {
+                if now.duration_since(mtime).unwrap_or_default() > STALE_TTL {
+                    return None;
                 }
             }
 
@@ -383,6 +391,9 @@ fn read_and_emit_merged(app: &AppHandle, dir: &Path, scanned: &[AgentStatus]) {
         }
     }
 
+    // Cross-validate hook statuses against scanner data (second heuristic layer)
+    crate::heuristics::cross_validate(&mut agents, scanned);
+
     sort_agents(&mut agents);
     emit_agents(app, agents);
 }
@@ -530,6 +541,7 @@ mod tests {
             id: id.into(), name: name.into(), status: status.into(), message: "".into(),
             terminal: None, can_focus: false, cpu: None,
             source: None, cli: None, session_id: None, hook_event: None, hook_matcher: None,
+            mtime: None,
         }
     }
 
@@ -544,6 +556,7 @@ mod tests {
             cpu: None,
             source: source.map(|s| s.into()),
             cli: None, session_id: None, hook_event: None, hook_matcher: None,
+            mtime: None,
         }
     }
 

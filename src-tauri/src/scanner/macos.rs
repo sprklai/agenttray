@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::watcher::TerminalInfo;
 use super::{known_terminal, ProcInfo, WindowCache};
-use super::strategies::CliStrategy;
+use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
 
 /// Find CLI processes matching any registered strategy.
 pub fn find_cli_processes<'a>(
@@ -31,11 +31,35 @@ pub fn find_cli_processes<'a>(
             .and_then(|n| n.to_str())
             .unwrap_or("");
 
-        let strategy = match strategies.iter().find(|s| {
+        // Phase 1: Direct exe_name match (native binaries like "claude")
+        let strategy = strategies.iter().find(|s| {
             s.process_names().iter().any(|n| *n == exe_name)
-        }) {
+        });
+
+        // Phase 2: If argv[0] is a script runtime (node, bun, etc.),
+        // check remaining args for script names (e.g., "gemini", "codex")
+        let strategy = match strategy {
             Some(s) => s.as_ref(),
-            None => continue,
+            None => {
+                if !SCRIPT_RUNTIMES.iter().any(|r| *r == exe_name) {
+                    continue;
+                }
+                match parts[5..].iter().find_map(|arg| {
+                    if arg.starts_with('-') {
+                        return None;
+                    }
+                    let arg_name = Path::new(arg)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("");
+                    strategies.iter().find(|s| {
+                        s.script_names().iter().any(|n| *n == arg_name)
+                    })
+                }) {
+                    Some(s) => s.as_ref(),
+                    None => continue,
+                }
+            }
         };
 
         let full_cmd = parts[4..].join(" ");
