@@ -256,3 +256,17 @@ fn osascript_window_title(term_pid: u32) -> Option<String> {
     let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if name.is_empty() { None } else { Some(name) }
 }
+
+/// Read a single environment variable from a running process.
+/// macOS `ps eww` appends env vars after the command; we scan for KEY=value tokens.
+/// Works reliably for simple values (UUIDs, alphanumeric strings without spaces).
+pub fn read_proc_env(pid: u32, key: &str) -> Option<String> {
+    let output = std::process::Command::new("ps")
+        .args(["eww", "-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let prefix = format!("{}=", key);
+    stdout.split_whitespace()
+        .find_map(|token| token.strip_prefix(&prefix).map(str::to_string))
+}

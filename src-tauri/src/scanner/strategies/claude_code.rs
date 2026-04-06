@@ -7,12 +7,18 @@ pub struct ClaudeCodeStrategy;
 /// does not currently use dynamic status indicators (no ✋/✦ icons).
 /// These patterns match keywords that may appear in the title text.
 const TITLE_PATTERNS: &[TitlePattern] = &[
-    TitlePattern { pattern: "waiting", status: "needs-input", confidence: 0.9 },
-    TitlePattern { pattern: "approve", status: "needs-input", confidence: 0.9 },
-    TitlePattern { pattern: "allow", status: "needs-input", confidence: 0.9 },
-    TitlePattern { pattern: "running", status: "working", confidence: 0.9 },
-    TitlePattern { pattern: "editing", status: "working", confidence: 0.9 },
-    TitlePattern { pattern: "thinking", status: "working", confidence: 0.9 },
+    // needs-input signals
+    TitlePattern { pattern: "waiting",    status: "needs-input", confidence: 0.9 },
+    TitlePattern { pattern: "approve",    status: "needs-input", confidence: 0.9 },
+    TitlePattern { pattern: "allow",      status: "needs-input", confidence: 0.9 },
+    TitlePattern { pattern: "permission", status: "needs-input", confidence: 0.85 },
+    TitlePattern { pattern: "yes/no",     status: "needs-input", confidence: 0.85 },
+    TitlePattern { pattern: "bypass",     status: "needs-input", confidence: 0.8 },
+    // working signals
+    TitlePattern { pattern: "running",    status: "working", confidence: 0.9 },
+    TitlePattern { pattern: "editing",    status: "working", confidence: 0.9 },
+    TitlePattern { pattern: "thinking",   status: "working", confidence: 0.9 },
+    TitlePattern { pattern: "interrupt",  status: "working", confidence: 0.85 },
 ];
 
 impl CliStrategy for ClaudeCodeStrategy {
@@ -52,7 +58,7 @@ impl CliStrategy for ClaudeCodeStrategy {
         } else {
             DetectedState {
                 status: "idle".to_string(),
-                message: info.cwd.display().to_string(),
+                message: info.cwd_display(),
                 confidence: 0.3,
             }
         }
@@ -68,6 +74,10 @@ impl CliStrategy for ClaudeCodeStrategy {
 
     fn title_patterns(&self) -> &[TitlePattern] {
         TITLE_PATTERNS
+    }
+
+    fn session_env_var(&self) -> Option<&str> {
+        Some("CLAUDE_SESSION_ID")
     }
 }
 

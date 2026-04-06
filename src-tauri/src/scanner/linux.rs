@@ -259,3 +259,13 @@ fn xdotool_search_pid(pid: u32) -> Option<String> {
     let wid: u64 = decimal.parse().ok()?;
     Some(format!("0x{:x}", wid))
 }
+
+/// Read a single environment variable from a running process via /proc/PID/environ.
+/// The file contains null-separated KEY=VALUE pairs.
+pub fn read_proc_env(pid: u32, key: &str) -> Option<String> {
+    let data = std::fs::read(format!("/proc/{}/environ", pid)).ok()?;
+    let prefix = format!("{}=", key);
+    data.split(|&b| b == 0)
+        .filter_map(|entry| std::str::from_utf8(entry).ok())
+        .find_map(|entry| entry.strip_prefix(&prefix).map(str::to_string))
+}

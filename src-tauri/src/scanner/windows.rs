@@ -214,3 +214,77 @@ fn powershell_window_title(pid: u32) -> Option<String> {
     let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if name.is_empty() { None } else { Some(name) }
 }
+
+/// Read a single environment variable from a running process on Windows.
+///
+/// Uses PowerShell `Add-Type` to PInvoke the Windows API:
+/// `OpenProcess` → `NtQueryInformationProcess` (PEB address) →
+/// `ReadProcessMemory` (ProcessParameters → Environment block) → parse.
+///
+/// Works for same-user processes. Requires PROCESS_QUERY_INFORMATION |
+/// PROCESS_VM_READ access (both granted by default for same-user processes).
+/// The result is cached in Scanner.session_id_cache, so PowerShell is only
+/// spawned once per PID across scan cycles.
+pub fn read_proc_env(pid: u32, key: &str) -> Option<String> {
+    // Guard against injection — env var names are always safe ASCII identifiers.
+    if !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        return None;
+    }
+    let script = PS_READ_ENV
+        .replace("__PID__", &pid.to_string())
+        .replace("__KEY__", key);
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .ok()?;
+    let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if val.is_empty() { None } else { Some(val) }
+}
+
+/// PowerShell script that reads a process environment variable via Windows APIs.
+/// __PID__ and __KEY__ are substituted at runtime.
+const PS_READ_ENV: &str = r#"
+$p = __PID__; $k = '__KEY__'
+if (-not ([System.Management.Automation.PSTypeName]'AgentTrayEnv').Type) {
+    Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices; using System.Text;
+public class AgentTrayEnv {
+    const int PROCESS_QUERY_INFORMATION = 0x0400, PROCESS_VM_READ = 0x0010;
+    [DllImport("kernel32")] static extern IntPtr OpenProcess(int a, bool b, int c);
+    [DllImport("kernel32")] static extern bool ReadProcessMemory(IntPtr h, IntPtr addr, byte[] buf, int sz, out int n);
+    [DllImport("kernel32")] static extern bool CloseHandle(IntPtr h);
+    [DllImport("ntdll")] static extern int NtQueryInformationProcess(IntPtr h, int cls, ref PBI pbi, int sz, out int ret);
+    [StructLayout(LayoutKind.Sequential)] struct PBI {
+        IntPtr r1; public IntPtr PebBase; IntPtr r2, r3; UIntPtr r4; IntPtr r5;
+    }
+    static IntPtr ReadPtr(IntPtr h, IntPtr addr) {
+        var b = new byte[IntPtr.Size]; int n;
+        ReadProcessMemory(h, addr, b, b.Length, out n);
+        return IntPtr.Size == 8
+            ? new IntPtr(BitConverter.ToInt64(b, 0))
+            : new IntPtr(BitConverter.ToInt32(b, 0));
+    }
+    public static string Get(int pid, string key) {
+        var h = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid);
+        if (h == IntPtr.Zero) return null;
+        try {
+            var pbi = new PBI(); int ret;
+            NtQueryInformationProcess(h, 0, ref pbi, Marshal.SizeOf(typeof(PBI)), out ret);
+            bool x64 = IntPtr.Size == 8;
+            var pp = ReadPtr(h, IntPtr.Add(pbi.PebBase, x64 ? 0x20 : 0x10));
+            var ep = ReadPtr(h, IntPtr.Add(pp, x64 ? 0x80 : 0x48));
+            var buf = new byte[65536]; int read;
+            ReadProcessMemory(h, ep, buf, buf.Length, out read);
+            var env = Encoding.Unicode.GetString(buf, 0, Math.Max(0, read - 2));
+            foreach (var pair in env.Split('\0'))
+                if (pair.StartsWith(key + "=", StringComparison.OrdinalIgnoreCase))
+                    return pair.Substring(key.Length + 1);
+            return null;
+        } finally { CloseHandle(h); }
+    }
+}
+'@ -ErrorAction SilentlyContinue
+}
+$r = [AgentTrayEnv]::Get($p, $k)
+if ($r) { Write-Output $r }
+"#;

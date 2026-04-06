@@ -72,6 +72,14 @@ pub trait CliStrategy: Send + Sync {
     fn title_patterns(&self) -> &[TitlePattern] {
         &[]
     }
+
+    /// Name of the environment variable that holds the session ID for this CLI.
+    /// The scanner reads this from the process environment when available,
+    /// allowing scan-detected agents to be correlated with hook-sourced data.
+    /// Returns `None` for CLIs that don't expose a session identifier.
+    fn session_env_var(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// Match a window title against a strategy's title patterns.

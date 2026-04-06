@@ -34,6 +34,11 @@ type WindowCache = HashMap<u32, Option<String>>;
 pub struct Scanner {
     prev: HashMap<u32, CpuSnapshot>,
     window_cache: WindowCache,
+    /// Per-PID cache for session IDs read from process environment.
+    /// Session IDs are stable for a process's lifetime; caching avoids
+    /// re-reading on every scan (important on Windows where env reading
+    /// spawns a PowerShell process).
+    session_id_cache: HashMap<u32, Option<String>>,
     strategies: Vec<Box<dyn strategies::CliStrategy>>,
 }
 
@@ -52,11 +57,25 @@ pub struct ProcInfo {
     pub last_active: Option<Instant>,
 }
 
+impl ProcInfo {
+    /// Format the working directory as a home-relative path (e.g. `~/project`)
+    /// when possible, falling back to the absolute path.
+    pub fn cwd_display(&self) -> String {
+        if let Some(home) = std::env::var_os("HOME") {
+            if let Ok(rel) = self.cwd.strip_prefix(&home) {
+                return format!("~/{}", rel.display());
+            }
+        }
+        self.cwd.display().to_string()
+    }
+}
+
 impl Scanner {
     pub fn new() -> Self {
         Self {
             prev: HashMap::new(),
             window_cache: HashMap::new(),
+            session_id_cache: HashMap::new(),
             strategies: strategies::all_strategies(),
         }
     }
@@ -107,11 +126,10 @@ impl Scanner {
             // Delegate state detection to the strategy
             let detected = strategy.detect_state(&p, cpu_pct, child_count);
 
-            // Build display name
+            // Build display name from terminal label + tty (not window title, which
+            // may contain transient status text like "Claude Code - Waiting for approval").
             let suffix = if let Some(ref t) = terminal {
-                if let Some(ref wt) = t.window_title {
-                    wt.clone()
-                } else if !t.label.is_empty() && !p.tty_label.is_empty() {
+                if !t.label.is_empty() && !p.tty_label.is_empty() {
                     format!("{} · {}", t.label, p.tty_label)
                 } else if !t.label.is_empty() {
                     t.label.clone()
@@ -135,6 +153,17 @@ impl Scanner {
 
             let id = format!("scan:{}", p.tty_label);
 
+            // Read session ID from the process environment when the strategy
+            // exposes an env var name (e.g. CLAUDE_SESSION_ID for Claude Code).
+            // Cached per-PID: session IDs are stable for a process's lifetime,
+            // and env reads can be expensive on Windows (spawns PowerShell).
+            let session_id = strategy.session_env_var().and_then(|key| {
+                self.session_id_cache
+                    .entry(p.pid)
+                    .or_insert_with(|| platform::read_proc_env(p.pid, key))
+                    .clone()
+            });
+
             let agent = AgentStatus {
                 id,
                 name,
@@ -145,7 +174,7 @@ impl Scanner {
                 cpu: Some(cpu_pct),
                 source: Some("scan".into()),
                 cli: Some(strategy.cli_name().to_string()),
-                session_id: None,
+                session_id,
                 hook_event: None,
                 hook_matcher: None,
                 mtime: None,
@@ -174,6 +203,7 @@ impl Scanner {
         }
 
         self.prev.retain(|pid, _| seen.contains(pid));
+        self.session_id_cache.retain(|pid, _| seen.contains(pid));
         agents
     }
 
