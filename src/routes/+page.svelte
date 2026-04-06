@@ -113,7 +113,7 @@
           outer_id: agent.terminal.outer_id,
         }
       });
-      getCurrentWindow().hide();
+      if (!pinned) getCurrentWindow().hide();
     } catch (e) {
       focusError = String(e);
       setTimeout(() => { focusError = ''; }, 4000);
