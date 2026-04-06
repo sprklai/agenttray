@@ -10,12 +10,27 @@ if (-not (Test-Path $MonitorDir)) {
     New-Item -ItemType Directory -Path $MonitorDir -Force | Out-Null
 }
 
+# ── Read stdin FIRST (hook systems pipe JSON) ─────────────────
+# Must happen before CLI/session detection since those need the JSON.
+
+$InputText = ''
+if ([Console]::IsInputRedirected) {
+    $InputText = [Console]::In.ReadToEnd()
+}
+
+$InputObj = $null
+if ($InputText) {
+    try { $InputObj = $InputText | ConvertFrom-Json } catch {}
+}
+
 # ── CLI Detection ──────────────────────────────────────────────
 
 function Get-CliName {
-    if ($env:CLAUDE_SESSION_ID) { return 'claude-code' }
+    # Check CLI-specific env vars first (most specific indicators).
+    # session_id in JSON is a common field for ALL CLIs, not Claude-specific.
     if ($env:GEMINI_CLI -eq '1' -or $env:GEMINI_SESSION_ID) { return 'gemini' }
     if ($env:CODEX_SESSION_ID) { return 'codex' }
+    if ($env:CLAUDE_SESSION_ID) { return 'claude-code' }
 
     # Fallback: check parent process name
     try {
@@ -36,7 +51,13 @@ $Cli = Get-CliName
 # ── Session ID ─────────────────────────────────────────────────
 
 function Get-SessionId {
-    param([string]$CliName)
+    param([string]$CliName, [object]$JsonInput)
+    # Prefer session_id from JSON input (most reliable in hook subprocesses
+    # where env vars like CLAUDE_SESSION_ID may not be available)
+    if ($JsonInput -and $JsonInput.session_id) {
+        return $JsonInput.session_id
+    }
+    # Fallback to env vars
     switch ($CliName) {
         'claude-code' { if ($env:CLAUDE_SESSION_ID) { return $env:CLAUDE_SESSION_ID } }
         'codex'       { if ($env:CODEX_SESSION_ID)  { return $env:CODEX_SESSION_ID } }
@@ -45,7 +66,7 @@ function Get-SessionId {
     return "$PID"
 }
 
-$SessionId = Get-SessionId -CliName $Cli
+$SessionId = Get-SessionId -CliName $Cli -JsonInput $InputObj
 $SessionShort = $SessionId.Substring(0, [Math]::Min(8, $SessionId.Length))
 $StatusFile = Join-Path $MonitorDir "${Cli}-${SessionShort}.status"
 
@@ -107,17 +128,6 @@ function Remove-StatusFile {
 }
 
 # ── Event Mapping ──────────────────────────────────────────────
-
-# Read stdin (hook systems pipe JSON)
-$InputText = ''
-if ([Console]::IsInputRedirected) {
-    $InputText = [Console]::In.ReadToEnd()
-}
-
-$InputObj = $null
-if ($InputText) {
-    try { $InputObj = $InputText | ConvertFrom-Json } catch {}
-}
 
 # Extract event name (try multiple field names)
 $Event = ''

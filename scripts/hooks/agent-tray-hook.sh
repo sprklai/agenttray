@@ -47,17 +47,23 @@ json_field() {
 # ── CLI Detection ──────────────────────────────────────────────
 
 detect_cli() {
-  # Check JSON input for session_id (most reliable in hook context)
-  local json_session
-  json_session=$(json_field "$INPUT" "session_id" 2>/dev/null || true)
-
-  if [ -n "${CLAUDE_SESSION_ID:-}" ] || [ -n "$json_session" ]; then
-    echo "claude-code"
-  elif [ "${GEMINI_CLI:-}" = "1" ] || [ -n "${GEMINI_SESSION_ID:-}" ]; then
+  # Check CLI-specific env vars first (most specific indicators).
+  # IMPORTANT: session_id in JSON is a common field for ALL CLIs,
+  # so it must NOT be used as a Claude Code indicator.
+  if [ "${GEMINI_CLI:-}" = "1" ] || [ -n "${GEMINI_SESSION_ID:-}" ]; then
     echo "gemini"
   elif [ -n "${CODEX_SESSION_ID:-}" ]; then
     echo "codex"
+  elif [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+    echo "claude-code"
   else
+    # Check JSON: hook_event_name is Claude Code-specific
+    local hook_event_name
+    hook_event_name=$(json_field "$INPUT" "hook_event_name" 2>/dev/null || true)
+    if [ -n "$hook_event_name" ]; then
+      echo "claude-code"
+      return
+    fi
     # Fallback: check parent process name
     local parent=""
     if command -v ps >/dev/null 2>&1; then
@@ -243,6 +249,15 @@ build_terminal_json() {
       wid=$(xdotool search --pid "$walk_pid" 2>/dev/null | head -1 || true)
       if [ -n "$wid" ]; then
         focus_id=$(printf '0x%x' "$wid")
+        kind="x11_generic"
+        # Try to identify the terminal app from WM_CLASS
+        if command -v xprop >/dev/null 2>&1; then
+          local wm_class
+          wm_class=$(xprop -id "$wid" WM_CLASS 2>/dev/null | awk -F'"' '{print $(NF-1)}' || true)
+          if [ -n "$wm_class" ]; then
+            label="$wm_class"
+          fi
+        fi
         break
       fi
       walk_pid=$(ps -o ppid= -p "$walk_pid" 2>/dev/null | tr -d ' ' || true)

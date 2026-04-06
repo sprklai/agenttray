@@ -66,3 +66,29 @@ export const CLI_COLOR: Record<AgentCli, string> = {
   'gemini':      '#4a90d9',
   'unknown':     '#888888',
 };
+
+/** Maps terminal kind → short display name. null = use terminal.label instead. */
+const TERMINAL_KIND_DISPLAY: Record<string, string | null> = {
+  tmux:           'tmux',
+  screen:         'screen',
+  zellij:         'zellij',
+  neovim:         'nvim',
+  vscode:         'VS Code',
+  jetbrains:      'JetBrains',
+  kitty:          'kitty',
+  x11_generic:    null,
+  macos_app:      null,
+  windows_native: null,
+  unknown:        null,
+};
+
+export function formatTerminalChip(terminal: TerminalInfo | null): string | null {
+  if (!terminal) return null;
+  const kindDisplay = TERMINAL_KIND_DISPLAY[terminal.kind] ?? null;
+  const label = terminal.label || null;
+
+  if (!kindDisplay && !label) return null;
+  if (!kindDisplay) return label;
+  if (!label || kindDisplay.toLowerCase() === label.toLowerCase()) return kindDisplay;
+  return `${kindDisplay} · ${label}`;
+}

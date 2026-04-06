@@ -13,7 +13,7 @@
 
   // Dynamic window height constants (logical pixels)
   const HEADER_H = 36;
-  const ROW_H = 44;
+  const ROW_H = 48;
   const LIST_PAD = 8;
   const OUTER_MARGIN = 8; // 4px margin × 2
   const PANEL_BORDER = 2; // 1px × 2
@@ -127,7 +127,7 @@
   <!-- Header (drag region) -->
   <div data-tauri-drag-region class="flex items-center justify-between px-3.5 py-2.5 border-b border-white/[0.06]"
        style="background: rgba(255,255,255,0.03);">
-    <span data-tauri-drag-region class="text-[10px] font-semibold tracking-widest uppercase text-[#8a8880]">Agents Tray</span>
+    <span data-tauri-drag-region class="text-[10px] font-semibold tracking-widest uppercase text-[#8a8880]">AgentTray</span>
     <div class="flex items-center gap-1.5">
       <AggregatePill state={aggregateState} />
       <button

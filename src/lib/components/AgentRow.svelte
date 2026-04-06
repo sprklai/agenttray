@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { AgentStatus } from '$lib/types';
-  import { STATUS_LABEL, CLI_LABEL, CLI_COLOR } from '$lib/types';
+  import { STATUS_LABEL, CLI_LABEL, CLI_COLOR, formatTerminalChip } from '$lib/types';
   import StatusDot from './StatusDot.svelte';
+  import { SquareTerminal } from '@lucide/svelte';
 
   let {
     agent,
@@ -12,6 +13,7 @@
 
   let cliLabel = $derived(agent.cli ? CLI_LABEL[agent.cli] || '' : '');
   let cliColor = $derived(agent.cli ? CLI_COLOR[agent.cli] || '#888' : '#888');
+  let termChip = $derived(formatTerminalChip(agent.terminal));
 </script>
 
 <li
@@ -33,7 +35,17 @@
       {/if}
     </div>
     <p class="text-[11px] text-[#8a8880] truncate mt-[1px]">
-      {agent.message || STATUS_LABEL[agent.status]}
+      {#if termChip}
+        <span class="inline-flex items-center gap-[3px] text-[#9a9890]">
+          <SquareTerminal size={11} strokeWidth={1.8} class="inline-block flex-shrink-0" />
+          <span>{termChip}</span>
+        </span>
+        {#if agent.message}
+          <span class="text-[#6a6860]"> — </span>{agent.message}
+        {/if}
+      {:else}
+        {agent.message || STATUS_LABEL[agent.status]}
+      {/if}
     </p>
   </div>
 
@@ -41,10 +53,6 @@
     {#if agent.cpu != null && agent.cpu > 0}
       <span class="text-[10px] font-mono text-[#8a8880] opacity-80 tabular-nums">
         {agent.cpu.toFixed(0)}% CPU
-      </span>
-    {:else}
-      <span class="text-[10px] text-[#8a8880] opacity-60 max-w-[100px] truncate text-right" title={agent.terminal?.window_title ?? agent.terminal?.label ?? ''}>
-        {agent.terminal?.window_title ?? agent.terminal?.label ?? ''}
       </span>
     {/if}
     {#if agent.can_focus}
