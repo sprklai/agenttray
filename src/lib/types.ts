@@ -45,10 +45,10 @@ export const STATUS_LABEL: Record<Status, string> = {
 };
 
 export const STATUS_COLOR: Record<Status, string> = {
-  'needs-input': '#dd4f4f',
-  'error':       '#cc7a28',
-  'working':     '#c99626',
-  'starting':    '#4898cc',
+  'needs-input': '#e8c840',
+  'error':       '#dd4f4f',
+  'working':     '#4a90d9',
+  'starting':    '#4ecdc4',
   'idle':        '#78b644',
   'offline':     '#555555',
 };
@@ -65,11 +65,4 @@ export const CLI_COLOR: Record<AgentCli, string> = {
   'codex':       '#6fbe5a',
   'gemini':      '#4a90d9',
   'unknown':     '#888888',
-};
-
-export const CLI_ICON_LABEL: Record<AgentCli, string> = {
-  'claude-code': 'Claude Code',
-  'codex':       'OpenAI Codex',
-  'gemini':      'Google Gemini',
-  'unknown':     'Unknown agent',
 };

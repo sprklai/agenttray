@@ -48,17 +48,33 @@ impl Notifier for DesktopNotifier {
                     Some(r) => format!("{} needs your input ({})", agent_name, r),
                     None => format!("{} needs your input", agent_name),
                 };
-                if let Err(e) = app.notification()
+                let mut builder = app.notification()
                     .builder()
                     .title("AgentTray")
-                    .body(&body)
-                    .show()
-                {
+                    .body(&body);
+                if let Some(icon_path) = notification_icon_path() {
+                    builder = builder.icon(icon_path);
+                }
+                if let Err(e) = builder.show() {
                     log::warn!("Desktop notification failed: {}", e);
                 }
             }
         }
     }
+}
+
+/// Returns an absolute path to the notification icon, writing it to a cache
+/// file on first call. On Linux, notify_rust needs an absolute path or
+/// freedesktop icon name; in dev mode the app isn't installed, so auto_icon()
+/// fails. We embed the 128x128 app icon at compile time and materialize it.
+fn notification_icon_path() -> Option<String> {
+    let cache_dir = dirs_next::cache_dir()?.join("agent-tray");
+    let icon_path = cache_dir.join("notification-icon.png");
+    if !icon_path.exists() {
+        std::fs::create_dir_all(&cache_dir).ok()?;
+        std::fs::write(&icon_path, include_bytes!("../icons/128x128.png")).ok()?;
+    }
+    Some(icon_path.to_string_lossy().into_owned())
 }
 
 /// Fires multiple notifiers in sequence (beep + desktop banner).
