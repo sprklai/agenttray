@@ -1,0 +1,17 @@
+# CODEOWNERS — auto-request review from the right people.
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default: everything goes to the project maintainer
+*                           @rakeshdhote
+
+# Rust backend
+src-tauri/**                @rakeshdhote
+
+# Frontend
+src/**                      @rakeshdhote
+
+# Scripts and hooks
+scripts/**                  @rakeshdhote
+
+# CI and GitHub config
+.github/**                  @rakeshdhote
