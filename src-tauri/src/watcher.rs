@@ -180,11 +180,16 @@ fn read_all(dir: &Path) -> Vec<AgentStatus> {
                 .and_then(|m| m.modified().ok());
             agent.mtime = file_mtime;
 
-            // Filter stale status files: if the file hasn't been written to
+            // Clean up stale status files: if the file hasn't been written to
             // in STALE_TTL, the session likely exited without sending
-            // SessionEnd.  The scanner will still show live processes.
+            // SessionEnd.  Delete the orphaned file and skip it.
             if let Some(mtime) = file_mtime {
                 if now.duration_since(mtime).unwrap_or_default() > STALE_TTL {
+                    if let Err(e) = std::fs::remove_file(&path) {
+                        log::warn!("Failed to clean up stale status file {:?}: {}", path, e);
+                    } else {
+                        log::info!("Cleaned up stale status file: {:?}", path);
+                    }
                     return None;
                 }
             }
@@ -339,8 +344,11 @@ fn source_priority(source: Option<&str>) -> u8 {
 fn read_and_emit_merged(app: &AppHandle, dir: &Path, scanned: &[AgentStatus]) {
     let file_agents = read_all(dir);
 
-    // Dedup file agents: when multiple files share the same focus_id,
-    // keep the one with the highest source priority (hook > wrap).
+    // Dedup file agents: when multiple files share the same focus_id
+    // AND have different source priorities, keep the higher-priority one
+    // (hook > wrap). Same-priority files are distinct sessions (e.g.,
+    // multiple hooks in different tabs of one terminal window share an
+    // X11 window ID but represent separate agents).
     let mut by_focus: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut keep = vec![true; file_agents.len()];
 
@@ -354,6 +362,10 @@ fn read_and_emit_merged(app: &AppHandle, dir: &Path, scanned: &[AgentStatus]) {
         if let Some(&prev_idx) = by_focus.get(fid) {
             let prev_prio = source_priority(file_agents[prev_idx].source.as_deref());
             let cur_prio = source_priority(a.source.as_deref());
+            if cur_prio == prev_prio {
+                // Same source type — distinct sessions, keep both
+                continue;
+            }
             if cur_prio < prev_prio {
                 keep[prev_idx] = false;
                 by_focus.insert(fid.to_string(), i);
@@ -371,22 +383,29 @@ fn read_and_emit_merged(app: &AppHandle, dir: &Path, scanned: &[AgentStatus]) {
         .map(|(_, a)| a)
         .collect();
 
-    // Collect focus_ids from surviving file agents for scan dedup
-    let file_focus_ids: std::collections::HashSet<String> = deduped_files
-        .iter()
-        .filter_map(|a| a.terminal.as_ref())
-        .filter(|t| !t.focus_id.is_empty() && t.focus_id != "0")
-        .map(|t| t.focus_id.clone())
-        .collect();
+    // Budget-based scan suppression: each file agent "claims" one scan
+    // slot per focus_id. Extra scanned agents (from additional terminal
+    // tabs sharing the same window ID) pass through.
+    let mut file_focus_budget: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for a in &deduped_files {
+        if let Some(t) = &a.terminal {
+            if !t.focus_id.is_empty() && t.focus_id != "0" {
+                *file_focus_budget.entry(t.focus_id.clone()).or_insert(0) += 1;
+            }
+        }
+    }
 
     let mut agents = deduped_files;
     for s in scanned {
-        let dominated = s
-            .terminal
-            .as_ref()
-            .map(|t| !t.focus_id.is_empty() && file_focus_ids.contains(&t.focus_id))
-            .unwrap_or(false);
-        if !dominated {
+        let fid = s.terminal.as_ref()
+            .map(|t| t.focus_id.as_str())
+            .unwrap_or("");
+        let suppress = if !fid.is_empty() && fid != "0" {
+            if let Some(budget) = file_focus_budget.get_mut(fid) {
+                if *budget > 0 { *budget -= 1; true } else { false }
+            } else { false }
+        } else { false };
+        if !suppress {
             agents.push(s.clone());
         }
     }
@@ -582,21 +601,25 @@ mod tests {
         let file_agents = vec![file_agent.clone()];
         let scanned = vec![scanned_dup, scanned_unique.clone()];
 
-        let file_focus_ids: std::collections::HashSet<String> = file_agents
-            .iter()
-            .filter_map(|a| a.terminal.as_ref())
-            .filter(|t| !t.focus_id.is_empty())
-            .map(|t| t.focus_id.clone())
-            .collect();
+        // Budget-based suppression: 1 file agent with 0x1234 → budget 1
+        let mut budget: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for a in &file_agents {
+            if let Some(t) = &a.terminal {
+                if !t.focus_id.is_empty() {
+                    *budget.entry(t.focus_id.clone()).or_insert(0) += 1;
+                }
+            }
+        }
 
         let mut agents = file_agents;
         for s in &scanned {
-            let dominated = s
-                .terminal
-                .as_ref()
-                .map(|t| !t.focus_id.is_empty() && file_focus_ids.contains(&t.focus_id))
-                .unwrap_or(false);
-            if !dominated {
+            let fid = s.terminal.as_ref().map(|t| t.focus_id.as_str()).unwrap_or("");
+            let suppress = if !fid.is_empty() {
+                if let Some(b) = budget.get_mut(fid) {
+                    if *b > 0 { *b -= 1; true } else { false }
+                } else { false }
+            } else { false };
+            if !suppress {
                 agents.push(s.clone());
             }
         }
@@ -611,6 +634,150 @@ mod tests {
         // hook source should beat wrap source when they share a focus_id
         assert!(source_priority(Some("hook")) < source_priority(Some("wrap")));
         assert!(source_priority(Some("wrap")) < source_priority(Some("scan")));
+    }
+
+    #[test]
+    fn two_hooks_same_focus_id_both_kept() {
+        // Multiple hook files in different tabs of the same terminal
+        // share a focus_id but should NOT be deduped against each other
+        let file_agents = vec![
+            test_agent_with_terminal("file:claude-code-aaa", "session-a", "working", "0x3800005", "Warp", Some("hook")),
+            test_agent_with_terminal("file:claude-code-bbb", "session-b", "needs-input", "0x3800005", "Warp", Some("hook")),
+        ];
+
+        let mut by_focus: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut keep = vec![true; file_agents.len()];
+
+        for (i, a) in file_agents.iter().enumerate() {
+            let fid = a.terminal.as_ref().map(|t| t.focus_id.as_str()).unwrap_or("");
+            if fid.is_empty() || fid == "0" { continue; }
+            if let Some(&prev_idx) = by_focus.get(fid) {
+                let prev_prio = source_priority(file_agents[prev_idx].source.as_deref());
+                let cur_prio = source_priority(a.source.as_deref());
+                if cur_prio == prev_prio {
+                    continue; // Same source type — distinct sessions
+                }
+                if cur_prio < prev_prio {
+                    keep[prev_idx] = false;
+                    by_focus.insert(fid.to_string(), i);
+                } else {
+                    keep[i] = false;
+                }
+            } else {
+                by_focus.insert(fid.to_string(), i);
+            }
+        }
+
+        // Both should survive
+        assert!(keep[0]);
+        assert!(keep[1]);
+    }
+
+    #[test]
+    fn hook_beats_wrap_same_focus_id_in_dedup() {
+        // A hook and a wrap file for the same focus_id: wrap gets killed
+        let file_agents = vec![
+            test_agent_with_terminal("file:wrapped", "wrapped", "idle", "0x1234", "Kitty", Some("wrap")),
+            test_agent_with_terminal("file:hooked", "hooked", "working", "0x1234", "Kitty", Some("hook")),
+        ];
+
+        let mut by_focus: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut keep = vec![true; file_agents.len()];
+
+        for (i, a) in file_agents.iter().enumerate() {
+            let fid = a.terminal.as_ref().map(|t| t.focus_id.as_str()).unwrap_or("");
+            if fid.is_empty() || fid == "0" { continue; }
+            if let Some(&prev_idx) = by_focus.get(fid) {
+                let prev_prio = source_priority(file_agents[prev_idx].source.as_deref());
+                let cur_prio = source_priority(a.source.as_deref());
+                if cur_prio == prev_prio { continue; }
+                if cur_prio < prev_prio {
+                    keep[prev_idx] = false;
+                    by_focus.insert(fid.to_string(), i);
+                } else {
+                    keep[i] = false;
+                }
+            } else {
+                by_focus.insert(fid.to_string(), i);
+            }
+        }
+
+        assert!(!keep[0]); // wrap killed
+        assert!(keep[1]);  // hook survives
+    }
+
+    #[test]
+    fn budget_suppresses_matching_count_of_scans() {
+        // 2 file agents with same focus_id → budget 2 → suppress 2 scans
+        let file_agents = vec![
+            test_agent_with_terminal("file:a", "a", "working", "0x3800005", "Warp", Some("hook")),
+            test_agent_with_terminal("file:b", "b", "idle", "0x3800005", "Warp", Some("hook")),
+        ];
+        let scanned = vec![
+            test_agent_with_terminal("scan:pts/1", "scan1", "idle", "0x3800005", "Warp", Some("scan")),
+            test_agent_with_terminal("scan:pts/2", "scan2", "idle", "0x3800005", "Warp", Some("scan")),
+        ];
+
+        let mut budget: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for a in &file_agents {
+            if let Some(t) = &a.terminal {
+                if !t.focus_id.is_empty() && t.focus_id != "0" {
+                    *budget.entry(t.focus_id.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        let mut agents = file_agents;
+        for s in &scanned {
+            let fid = s.terminal.as_ref().map(|t| t.focus_id.as_str()).unwrap_or("");
+            let suppress = if !fid.is_empty() && fid != "0" {
+                if let Some(b) = budget.get_mut(fid) {
+                    if *b > 0 { *b -= 1; true } else { false }
+                } else { false }
+            } else { false };
+            if !suppress { agents.push(s.clone()); }
+        }
+
+        // Both scans suppressed, only the 2 file agents remain
+        assert_eq!(agents.len(), 2);
+    }
+
+    #[test]
+    fn budget_allows_extra_scans_through() {
+        // 1 file agent → budget 1, but 2 scanned with same focus_id
+        // → 1 suppressed, 1 passes through
+        let file_agents = vec![
+            test_agent_with_terminal("file:a", "a", "working", "0x3800005", "Warp", Some("hook")),
+        ];
+        let scanned = vec![
+            test_agent_with_terminal("scan:pts/1", "scan1", "idle", "0x3800005", "Warp", Some("scan")),
+            test_agent_with_terminal("scan:pts/2", "scan2", "idle", "0x3800005", "Warp", Some("scan")),
+        ];
+
+        let mut budget: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for a in &file_agents {
+            if let Some(t) = &a.terminal {
+                if !t.focus_id.is_empty() && t.focus_id != "0" {
+                    *budget.entry(t.focus_id.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        let mut agents = file_agents;
+        for s in &scanned {
+            let fid = s.terminal.as_ref().map(|t| t.focus_id.as_str()).unwrap_or("");
+            let suppress = if !fid.is_empty() && fid != "0" {
+                if let Some(b) = budget.get_mut(fid) {
+                    if *b > 0 { *b -= 1; true } else { false }
+                } else { false }
+            } else { false };
+            if !suppress { agents.push(s.clone()); }
+        }
+
+        // 1 file agent + 1 extra scan = 2 total
+        assert_eq!(agents.len(), 2);
+        assert_eq!(agents[0].name, "a");
+        assert_eq!(agents[1].name, "scan2");
     }
 
     #[test]
