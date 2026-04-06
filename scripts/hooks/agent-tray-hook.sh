@@ -8,10 +8,50 @@ set -uo pipefail
 MONITOR_DIR="${HOME}/.agent-monitor"
 mkdir -p "${MONITOR_DIR}"
 
+# ── Read stdin FIRST (hook systems pipe JSON) ─────────────────
+# Must happen before CLI/session detection since those need the JSON.
+
+INPUT=""
+if [ ! -t 0 ]; then
+  INPUT=$(cat)
+fi
+
+# ── JSON Helpers ───────────────────────────────────────────────
+
+# Safely encode a string for JSON (handles special chars)
+json_str() {
+  local s="$1"
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$s" | jq -Rs .
+  else
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf '"%s"' "$s"
+  fi
+}
+
+# Read a field from the input JSON
+json_field() {
+  local json="$1" field="$2"
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$json" | jq -r ".${field} // empty" 2>/dev/null
+  else
+    # Crude fallback: grep for the field
+    printf '%s' "$json" | grep -oP "\"${field}\"\s*:\s*\"?\K[^,\"}\]]*" 2>/dev/null | head -1
+  fi
+}
+
 # ── CLI Detection ──────────────────────────────────────────────
 
 detect_cli() {
-  if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+  # Check JSON input for session_id (most reliable in hook context)
+  local json_session
+  json_session=$(json_field "$INPUT" "session_id" 2>/dev/null || true)
+
+  if [ -n "${CLAUDE_SESSION_ID:-}" ] || [ -n "$json_session" ]; then
     echo "claude-code"
   elif [ "${GEMINI_CLI:-}" = "1" ] || [ -n "${GEMINI_SESSION_ID:-}" ]; then
     echo "gemini"
@@ -35,8 +75,19 @@ detect_cli() {
 CLI=$(detect_cli)
 
 # ── Session ID ─────────────────────────────────────────────────
+# Claude Code provides session_id in the JSON input piped to stdin.
+# Env vars (CLAUDE_SESSION_ID) are NOT reliably available in hook
+# subprocesses, so we prefer the JSON field.
 
 get_session_id() {
+  # First try JSON input (most reliable for hooks)
+  local json_sid
+  json_sid=$(json_field "$INPUT" "session_id" 2>/dev/null || true)
+  if [ -n "$json_sid" ]; then
+    echo "$json_sid"
+    return
+  fi
+  # Fallback to env vars
   case "${CLI}" in
     claude-code) echo "${CLAUDE_SESSION_ID:-$$}" ;;
     codex)       echo "${CODEX_SESSION_ID:-$$}" ;;
@@ -62,45 +113,121 @@ build_terminal_json() {
   local uname_s
   uname_s="$(uname -s 2>/dev/null || echo Unknown)"
 
-  if [[ "$uname_s" == "Darwin" ]]; then
-    # macOS: focuser expects kind="macos_app", focus_id=app name, outer_id=tty
-    kind="macos_app"
-    outer_id=$(tty 2>/dev/null | sed 's|/dev/||' || true)
+  # ── 1. Cross-platform multiplexers (highest priority) ───────
+  # These wrap around the real terminal; detect them first so the
+  # focuser can switch to the correct pane/session.
+
+  if [ -n "${TMUX:-}" ]; then
+    kind="tmux"
+    # Capture current pane target: session:window.pane
+    focus_id=$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null || echo "")
+    label="tmux"
+  elif [ -n "${STY:-}" ]; then
+    kind="screen"
+    focus_id="${STY}"
+    outer_id="${WINDOW:-0}"
+    label="GNU Screen"
+  elif [ -n "${ZELLIJ_SESSION_NAME:-}" ]; then
+    kind="zellij"
+    focus_id="${ZELLIJ_SESSION_NAME}"
+    label="Zellij"
+  fi
+
+  # ── 2. Neovim :terminal ─────────────────────────────────────
+  if [ "$kind" = "unknown" ] && [ -n "${NVIM:-}" ]; then
+    kind="neovim"
+    focus_id="${NVIM}"   # socket path
+    label="Neovim"
+  fi
+
+  # ── 3. IDE terminals (cross-platform) ───────────────────────
+  if [ "$kind" = "unknown" ]; then
     case "${TERM_PROGRAM:-}" in
-      iTerm.app)       focus_id="iTerm2";   label="iTerm2" ;;
-      Apple_Terminal)   focus_id="Terminal";  label="Terminal" ;;
-      WezTerm)          focus_id="WezTerm";   label="WezTerm" ;;
-      *)                focus_id="${TERM_PROGRAM:-}"; label="${TERM_PROGRAM:-Terminal}" ;;
+      vscode)
+        kind="vscode"
+        label="VS Code"
+        ;;
     esac
-  elif [[ "$uname_s" == MINGW* ]] || [[ "$uname_s" == MSYS* ]] || [[ "$uname_s" == CYGWIN* ]]; then
-    # Windows via Git Bash / MSYS2 / Cygwin
-    kind="windows_native"
-    if [ -n "${PPID:-}" ]; then
-      focus_id="${PPID}"
+    if [ "$kind" = "unknown" ] && [[ "${TERMINAL_EMULATOR:-}" == *JetBrains* ]]; then
+      kind="jetbrains"
+      label="JetBrains"
     fi
-    if [ -n "${WT_SESSION:-}" ]; then
-      label="Windows Terminal"
-    elif [ -n "${ConEmuPID:-}" ]; then
-      label="ConEmu"
-    elif [ -n "${TERM_PROGRAM:-}" ]; then
-      label="${TERM_PROGRAM}"
+  fi
+
+  # ── 4. Kitty (has its own remote-control API) ───────────────
+  if [ "$kind" = "unknown" ] && [ -n "${KITTY_WINDOW_ID:-}" ]; then
+    kind="kitty"
+    focus_id="${KITTY_WINDOW_ID}"
+    label="Kitty"
+  fi
+
+  # ── 5. Platform-specific terminals ──────────────────────────
+  if [ "$kind" = "unknown" ]; then
+    if [[ "$uname_s" == "Darwin" ]]; then
+      kind="macos_app"
+      # tty may return "not a tty" in hook subprocesses; handle gracefully
+      local tty_raw
+      tty_raw=$(tty 2>/dev/null || true)
+      if [[ "$tty_raw" == "not a tty" ]] || [[ -z "$tty_raw" ]]; then
+        outer_id=""
+      else
+        outer_id=$(echo "$tty_raw" | sed 's|/dev/||')
+      fi
+      case "${TERM_PROGRAM:-}" in
+        iTerm.app)       focus_id="iTerm2";     label="iTerm2" ;;
+        Apple_Terminal)   focus_id="Terminal";    label="Terminal" ;;
+        WezTerm)          focus_id="WezTerm";     label="WezTerm" ;;
+        ghostty)          focus_id="Ghostty";     label="Ghostty" ;;
+        Hyper)            focus_id="Hyper";        label="Hyper" ;;
+        Tabby|Terminus)   focus_id="Tabby";        label="Tabby" ;;
+        WarpTerminal)     focus_id="Warp";         label="Warp" ;;
+        *)                focus_id="${TERM_PROGRAM:-}"; label="${TERM_PROGRAM:-Terminal}" ;;
+      esac
+    elif [[ "$uname_s" == MINGW* ]] || [[ "$uname_s" == MSYS* ]] || [[ "$uname_s" == CYGWIN* ]]; then
+      kind="windows_native"
+      if [ -n "${PPID:-}" ]; then
+        focus_id="${PPID}"
+      fi
+      if [ -n "${WT_SESSION:-}" ]; then
+        label="Windows Terminal"
+      elif [ -n "${ConEmuPID:-}" ]; then
+        label="ConEmu"
+      elif [ -n "${CMDER_ROOT:-}" ]; then
+        label="Cmder"
+      elif [ -n "${TERM_PROGRAM:-}" ]; then
+        label="${TERM_PROGRAM}"
+      else
+        label="Git Bash"
+      fi
     else
-      label="Git Bash"
-    fi
-  else
-    # Linux/other: focuser expects kind="x11_generic", focus_id=X11 window ID (hex)
-    # Scanner produces hex format (0x...) so we must match it for dedup
-    if [ -n "${WINDOWID:-}" ]; then
-      focus_id=$(printf '0x%x' "$WINDOWID")
-    fi
-    if [ -n "${TERM_PROGRAM:-}" ]; then
-      kind="x11_generic"
-    elif [ -n "${KITTY_PID:-}" ]; then
-      kind="x11_generic"; label="Kitty"
-    elif [ -n "${ALACRITTY_SOCKET:-}" ]; then
-      kind="x11_generic"; label="Alacritty"
-    elif [ -n "${WINDOWID:-}" ]; then
-      kind="x11_generic"
+      # Linux / other Unix
+      if [ -n "${WINDOWID:-}" ]; then
+        focus_id=$(printf '0x%x' "$WINDOWID")
+      fi
+      if [ -n "${GHOSTTY_RESOURCES_DIR:-}" ]; then
+        kind="x11_generic"; label="Ghostty"
+      elif [ -n "${ALACRITTY_WINDOW_ID:-}" ] || [ -n "${ALACRITTY_SOCKET:-}" ]; then
+        kind="x11_generic"; label="Alacritty"
+      elif [ -n "${KONSOLE_VERSION:-}" ]; then
+        kind="x11_generic"; label="Konsole"
+      elif [ -n "${TERMINATOR_UUID:-}" ]; then
+        kind="x11_generic"; label="Terminator"
+      elif [ -n "${TILIX_ID:-}" ]; then
+        kind="x11_generic"; label="Tilix"
+      elif [ -n "${TERM_PROGRAM:-}" ]; then
+        kind="x11_generic"
+        case "${TERM_PROGRAM:-}" in
+          WarpTerminal) label="Warp" ;;
+          Hyper)        label="Hyper" ;;
+          Tabby|Terminus) label="Tabby" ;;
+          *)            label="${TERM_PROGRAM}" ;;
+        esac
+      elif [ -n "${KITTY_PID:-}" ]; then
+        # Fallback: kitty without KITTY_WINDOW_ID (older versions)
+        kind="x11_generic"; label="Kitty"
+      elif [ -n "${WINDOWID:-}" ]; then
+        kind="x11_generic"
+      fi
     fi
   fi
 
@@ -109,34 +236,6 @@ build_terminal_json() {
 }
 
 TERMINAL_JSON=$(build_terminal_json)
-
-# ── JSON Helpers ───────────────────────────────────────────────
-
-# Safely encode a string for JSON (handles special chars)
-json_str() {
-  local s="$1"
-  if command -v jq >/dev/null 2>&1; then
-    printf '%s' "$s" | jq -Rs .
-  else
-    s="${s//\\/\\\\}"
-    s="${s//\"/\\\"}"
-    s="${s//$'\n'/\\n}"
-    s="${s//$'\r'/\\r}"
-    s="${s//$'\t'/\\t}"
-    printf '"%s"' "$s"
-  fi
-}
-
-# Read a field from the input JSON (requires jq)
-json_field() {
-  local json="$1" field="$2"
-  if command -v jq >/dev/null 2>&1; then
-    printf '%s' "$json" | jq -r ".${field} // empty" 2>/dev/null
-  else
-    # Crude fallback: grep for the field
-    printf '%s' "$json" | grep -oP "\"${field}\"\s*:\s*\"?\K[^,\"}\]]*" 2>/dev/null | head -1
-  fi
-}
 
 # ── Status File Writer ─────────────────────────────────────────
 
@@ -159,12 +258,6 @@ delete_status() {
 }
 
 # ── Event Mapping ──────────────────────────────────────────────
-
-# Read stdin (hook systems pipe JSON)
-INPUT=""
-if [ ! -t 0 ]; then
-  INPUT=$(cat)
-fi
 
 # Claude Code uses "hook_event_name"; other CLIs may use "event" or "type"
 EVENT=$(json_field "$INPUT" "hook_event_name" 2>/dev/null || true)

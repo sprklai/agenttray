@@ -303,10 +303,17 @@ fn clk_tck() -> u64 {
 
 fn known_terminal(exe_name: &str) -> Option<&'static str> {
     match exe_name {
-        // Linux
+        // Cross-platform
         "warp" | "warp-terminal" => Some("Warp"),
         "kitty" => Some("Kitty"),
         "alacritty" => Some("Alacritty"),
+        "ghostty" | "Ghostty" => Some("Ghostty"),
+        "WezTerm" | "wezterm" | "wezterm-gui" => Some("WezTerm"),
+        "hyper" | "Hyper" => Some("Hyper"),
+        "tabby" | "Tabby" => Some("Tabby"),
+        // IDE terminals (process names)
+        "Code" | "code" | "Electron" => Some("Visual Studio Code"),
+        // Linux
         "gnome-terminal-server" | "gnome-terminal" => Some("GNOME Terminal"),
         "konsole" => Some("Konsole"),
         "xterm" => Some("XTerm"),
@@ -318,12 +325,12 @@ fn known_terminal(exe_name: &str) -> Option<&'static str> {
         "foot" => Some("Foot"),
         "st" => Some("st"),
         "urxvt" | "urxvtd" => Some("URxvt"),
-        "ghostty" => Some("Ghostty"),
         // macOS
         "Terminal" => Some("Terminal"),
         "iTerm2" => Some("iTerm2"),
         // Windows
         "WindowsTerminal.exe" | "WindowsTerminal" => Some("Windows Terminal"),
+        "ConEmuC.exe" | "ConEmuC64.exe" | "ConEmu.exe" => Some("ConEmu"),
         "cmd.exe" | "cmd" => Some("CMD"),
         "powershell.exe" | "powershell" | "pwsh.exe" | "pwsh" => Some("PowerShell"),
         _ => None,

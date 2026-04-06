@@ -6,6 +6,8 @@ use tauri::webview::WebviewWindowBuilder;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl};
 use tauri::tray::TrayIconId;
 
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+
 use crate::watcher::AgentStatus;
 
 static LAST_STATE: Mutex<String> = Mutex::new(String::new());
@@ -88,6 +90,7 @@ pub fn toggle_popup(app: &AppHandle) {
         if win.is_visible().unwrap_or(false) {
             PINNED.store(false, Ordering::Relaxed);
             let _ = app.emit("pinned-changed", false);
+            let _ = app.save_window_state(StateFlags::POSITION);
             let _ = win.hide();
             return;
         }
@@ -111,7 +114,9 @@ pub fn toggle_popup(app: &AppHandle) {
         .build()
     {
         Ok(win) => {
-            position_popup(app, &win);
+            // Plugin auto-restores saved position on window ready.
+            // For first launch (no saved state), fall back to top-right.
+            position_popup_if_default(app, &win);
             #[cfg(target_os = "linux")]
             {
                 let _ = std::process::Command::new("wmctrl")
@@ -154,11 +159,20 @@ pub fn hide_popup(app: &AppHandle) {
     PINNED.store(false, Ordering::Relaxed);
     let _ = app.emit("pinned-changed", false);
     if let Some(win) = app.get_webview_window("popup") {
+        let _ = app.save_window_state(StateFlags::POSITION);
         let _ = win.hide();
     }
 }
 
-fn position_popup(app: &AppHandle, win: &tauri::WebviewWindow) {
+/// Position the popup at the top-right corner only on first launch
+/// (when the window-state plugin has no saved position).
+fn position_popup_if_default(app: &AppHandle, win: &tauri::WebviewWindow) {
+    // If the plugin restored a saved position, the window won't be at (0,0).
+    if let Ok(pos) = win.outer_position() {
+        if pos.x != 0 || pos.y != 0 {
+            return; // Plugin restored a saved position
+        }
+    }
     if let Some(monitor) = app
         .primary_monitor()
         .ok()
@@ -167,7 +181,6 @@ fn position_popup(app: &AppHandle, win: &tauri::WebviewWindow) {
     {
         let size = monitor.size();
         let x = size.width as i32 - 410;
-        // Linux/macOS: top of screen; Windows would use bottom
         let y = 32;
         let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
     }
