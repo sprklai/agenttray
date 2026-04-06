@@ -231,6 +231,24 @@ build_terminal_json() {
     fi
   fi
 
+  # ── Fallback: find X11 window via xdotool when WINDOWID unset ─
+  # Mirrors the Rust scanner's approach: walk up the process tree
+  # and ask xdotool for the window owned by each ancestor PID.
+  if [ -z "${focus_id}" ] && [[ "$uname_s" == "Linux" ]] && command -v xdotool >/dev/null 2>&1; then
+    local walk_pid="${PPID}"
+    local i
+    for i in 1 2 3 4 5 6; do
+      [ -z "$walk_pid" ] || [ "$walk_pid" = "1" ] || [ "$walk_pid" = "0" ] && break
+      local wid
+      wid=$(xdotool search --pid "$walk_pid" 2>/dev/null | head -1 || true)
+      if [ -n "$wid" ]; then
+        focus_id=$(printf '0x%x' "$wid")
+        break
+      fi
+      walk_pid=$(ps -o ppid= -p "$walk_pid" 2>/dev/null | tr -d ' ' || true)
+    done
+  fi
+
   printf '{"kind":"%s","focus_id":"%s","outer_id":"%s","label":"%s","window_title":"%s"}' \
     "${kind}" "${focus_id}" "${outer_id}" "${label}" "${window_title}"
 }

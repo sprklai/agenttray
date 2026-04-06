@@ -170,14 +170,13 @@ fn read_all(dir: &Path) -> Vec<AgentStatus> {
 
             let agent = parse_status_file(&path)?;
 
-            // Filter stale terminal-state files: if offline or error and
-            // the file hasn't been written to in STALE_TTL, skip it.
-            if matches!(agent.status.as_str(), "offline" | "error" | "idle") {
-                if let Ok(meta) = std::fs::metadata(&path) {
-                    if let Ok(mtime) = meta.modified() {
-                        if now.duration_since(mtime).unwrap_or_default() > STALE_TTL {
-                            return None;
-                        }
+            // Filter stale status files: if the file hasn't been written to
+            // in STALE_TTL, the session likely exited without sending
+            // SessionEnd.  The scanner will still show live processes.
+            if let Ok(meta) = std::fs::metadata(&path) {
+                if let Ok(mtime) = meta.modified() {
+                    if now.duration_since(mtime).unwrap_or_default() > STALE_TTL {
+                        return None;
                     }
                 }
             }
