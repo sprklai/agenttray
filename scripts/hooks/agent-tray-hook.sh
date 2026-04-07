@@ -81,28 +81,63 @@ detect_cli() {
 CLI=$(detect_cli)
 
 # ── Session ID ─────────────────────────────────────────────────
-# Claude Code provides session_id in the JSON input piped to stdin.
-# Env vars (CLAUDE_SESSION_ID) are NOT reliably available in hook
-# subprocesses, so we prefer the JSON field.
+# Derive a stable session identifier shared by the main session AND its
+# subagents.  Priority: JSON session_id > CLI env var > process-tree walk.
+# The walk finds the top-level CLI ancestor process; its PID is the same
+# for hooks fired by the main session and any of its subagents.
+# IS_SUBAGENT is set to "true" when the walk finds more than one CLI
+# ancestor, meaning this hook was fired from a nested subagent process.
 
-get_session_id() {
-  # First try JSON input (most reliable for hooks)
-  local json_sid
-  json_sid=$(json_field "$INPUT" "session_id" 2>/dev/null || true)
-  if [ -n "$json_sid" ]; then
-    echo "$json_sid"
-    return
-  fi
-  # Fallback to env vars
+SESSION_ID=""
+IS_SUBAGENT="false"
+
+# 1. JSON session_id (most reliable when the CLI provides it)
+_json_sid=$(json_field "$INPUT" "session_id" 2>/dev/null || true)
+if [ -n "$_json_sid" ]; then
+  SESSION_ID="$_json_sid"
+fi
+
+# 2. CLI-specific env vars
+if [ -z "$SESSION_ID" ]; then
   case "${CLI}" in
-    claude-code) echo "${CLAUDE_SESSION_ID:-$$}" ;;
-    codex)       echo "${CODEX_SESSION_ID:-$$}" ;;
-    gemini)      echo "${GEMINI_SESSION_ID:-$$}" ;;
-    *)           echo "$$" ;;
+    claude-code) SESSION_ID="${CLAUDE_SESSION_ID:-}" ;;
+    codex)       SESSION_ID="${CODEX_SESSION_ID:-}" ;;
+    gemini)      SESSION_ID="${GEMINI_SESSION_ID:-}" ;;
   esac
-}
+fi
 
-SESSION_ID=$(get_session_id)
+# 3. Walk the process tree to find the top-level CLI ancestor.
+if [ -z "$SESSION_ID" ]; then
+  _walk_pid="${PPID}"
+  _root_cli_pid=""
+  _cli_depth=0
+  for _i in 1 2 3 4 5 6 7 8 9 10; do
+    [ -z "$_walk_pid" ] || [ "$_walk_pid" = "1" ] || [ "$_walk_pid" = "0" ] && break
+    _cmd_line=$(ps -o command= -p "$_walk_pid" 2>/dev/null || true)
+    [ -z "$_cmd_line" ] && break
+    _exe_base=$(basename "$(echo "$_cmd_line" | awk '{print $1}')" 2>/dev/null || true)
+    case "$_exe_base" in
+      claude|claude-code|codex|gemini)
+        _root_cli_pid="$_walk_pid"
+        _cli_depth=$((_cli_depth + 1))
+        ;;
+      node|bun|deno|python|python3)
+        # Check if running a CLI script (e.g. "node /path/to/claude/cli.js")
+        if echo "$_cmd_line" | grep -qi 'claude\|codex\|gemini'; then
+          _root_cli_pid="$_walk_pid"
+          _cli_depth=$((_cli_depth + 1))
+        fi
+        ;;
+    esac
+    _walk_pid=$(ps -o ppid= -p "$_walk_pid" 2>/dev/null | tr -d ' ' || true)
+  done
+  if [ -n "$_root_cli_pid" ]; then
+    SESSION_ID="$_root_cli_pid"
+  else
+    SESSION_ID="$$"
+  fi
+  [ "$_cli_depth" -gt 1 ] && IS_SUBAGENT="true"
+fi
 # Short session for filename (first 8 chars)
 SESSION_SHORT="${SESSION_ID:0:8}"
 STATUS_FILE="${MONITOR_DIR}/${CLI}-${SESSION_SHORT}.status"
@@ -360,7 +395,13 @@ map_claude_code() {
       write_status "working" "Subagent completed" "$EVENT"
       ;;
     SessionEnd)
-      delete_status
+      # Only delete from the root session; a subagent SessionEnd must not
+      # remove the parent's status file.
+      if [ "$IS_SUBAGENT" = "true" ]; then
+        write_status "working" "Subagent ended" "$EVENT"
+      else
+        delete_status
+      fi
       ;;
     *)
       # Unknown event — ignore silently
