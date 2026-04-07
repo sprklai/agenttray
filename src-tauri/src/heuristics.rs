@@ -5,6 +5,10 @@ use crate::watcher::AgentStatus;
 /// How old a hook status file must be before we consider it stale.
 const STALE_WORKING_TTL: Duration = Duration::from_secs(30);
 
+/// How long a permission_prompt needs-input can stay unacknowledged before
+/// we assume the permission was granted but the follow-up hook didn't fire.
+const STALE_PERMISSION_TTL: Duration = Duration::from_secs(60);
+
 /// CPU threshold below which a "working" hook status is suspect.
 const LOW_CPU_THRESHOLD: f64 = 0.5;
 
@@ -28,8 +32,8 @@ pub fn cross_validate(agents: &mut Vec<AgentStatus>, scanned: &[AgentStatus]) {
             continue;
         }
 
-        // Never override explicit user-facing states
-        if matches!(agent.status.as_str(), "needs-input" | "error") {
+        // "error" is always a definitive state — never override it.
+        if agent.status == "error" {
             continue;
         }
 
@@ -40,6 +44,23 @@ pub fn cross_validate(agents: &mut Vec<AgentStatus>, scanned: &[AgentStatus]) {
         let scan_cpu = scan.cpu.unwrap_or(0.0);
 
         match agent.status.as_str() {
+            // needs-input: never override in general, EXCEPT for stale
+            // permission_prompt entries where the follow-up hook likely
+            // didn't fire (common on macOS after granting permission).
+            "needs-input" => {
+                let is_permission_prompt =
+                    agent.hook_matcher.as_deref() == Some("permission_prompt");
+                if is_permission_prompt {
+                    let is_stale = agent.mtime
+                        .and_then(|mt| now.duration_since(mt).ok())
+                        .map(|age| age > STALE_PERMISSION_TTL)
+                        .unwrap_or(false);
+                    if is_stale && scan_cpu > LOW_CPU_THRESHOLD {
+                        agent.status = "working".to_string();
+                        agent.message = "Running tool...".to_string();
+                    }
+                }
+            }
             "working" | "starting" => {
                 // Stale working: hook says active but process CPU is near-zero
                 // and the status file hasn't been updated recently
@@ -261,5 +282,56 @@ mod tests {
 
         cross_validate(&mut agents, &scanned);
         assert_eq!(agents[0].status, "idle"); // stale + low CPU → downgraded
+    }
+
+    fn hook_agent_with_matcher(
+        status: &str, cli: &str, focus_id: &str,
+        matcher: Option<&str>, mtime: Option<SystemTime>,
+    ) -> AgentStatus {
+        let mut a = hook_agent(status, cli, focus_id, mtime);
+        a.hook_matcher = matcher.map(|s| s.into());
+        a
+    }
+
+    #[test]
+    fn stale_permission_prompt_cleared_when_process_active() {
+        // Simulates macOS case: permission granted, PreToolUse hook didn't fire.
+        let old_mtime = SystemTime::now() - Duration::from_secs(90);
+        let mut agents = vec![hook_agent_with_matcher(
+            "needs-input", "claude-code", "0x1234",
+            Some("permission_prompt"), Some(old_mtime),
+        )];
+        let scanned = vec![scan_agent("claude-code", "0x1234", 3.0)]; // CPU active
+
+        cross_validate(&mut agents, &scanned);
+        assert_eq!(agents[0].status, "working");
+    }
+
+    #[test]
+    fn fresh_permission_prompt_not_cleared() {
+        // Permission prompt is recent — user hasn't responded yet.
+        let fresh_mtime = SystemTime::now();
+        let mut agents = vec![hook_agent_with_matcher(
+            "needs-input", "claude-code", "0x1234",
+            Some("permission_prompt"), Some(fresh_mtime),
+        )];
+        let scanned = vec![scan_agent("claude-code", "0x1234", 3.0)];
+
+        cross_validate(&mut agents, &scanned);
+        assert_eq!(agents[0].status, "needs-input"); // too fresh to clear
+    }
+
+    #[test]
+    fn non_permission_needs_input_never_cleared() {
+        // Other needs-input types (idle_prompt, etc.) are never auto-cleared.
+        let old_mtime = SystemTime::now() - Duration::from_secs(90);
+        let mut agents = vec![hook_agent_with_matcher(
+            "needs-input", "claude-code", "0x1234",
+            Some("idle_prompt"), Some(old_mtime),
+        )];
+        let scanned = vec![scan_agent("claude-code", "0x1234", 3.0)];
+
+        cross_validate(&mut agents, &scanned);
+        assert_eq!(agents[0].status, "needs-input"); // idle_prompt not affected
     }
 }

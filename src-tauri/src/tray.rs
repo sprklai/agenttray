@@ -116,9 +116,10 @@ pub fn toggle_popup(app: &AppHandle) {
         .build()
     {
         Ok(win) => {
-            // Plugin auto-restores saved position on window ready.
-            // For first launch (no saved state), fall back to top-right.
-            position_popup_if_default(app, &win);
+            // Set top-right default in physical pixels; plugin restores saved position
+            // asynchronously on webview ready and will override this.
+            let (default_x, default_y) = compute_default_position(app);
+            let _ = win.set_position(tauri::PhysicalPosition::new(default_x, default_y));
             #[cfg(target_os = "linux")]
             {
                 let _ = std::process::Command::new("wmctrl")
@@ -166,26 +167,18 @@ pub fn hide_popup(app: &AppHandle) {
     }
 }
 
-/// Position the popup at the top-right corner only on first launch
-/// (when the window-state plugin has no saved position).
-fn position_popup_if_default(app: &AppHandle, win: &tauri::WebviewWindow) {
-    // If the plugin restored a saved position, the window won't be at (0,0).
-    if let Ok(pos) = win.outer_position() {
-        if pos.x != 0 || pos.y != 0 {
-            return; // Plugin restored a saved position
-        }
-    }
-    if let Some(monitor) = app
-        .primary_monitor()
+#[tauri::command]
+pub fn close_popup(app: AppHandle) {
+    hide_popup(&app);
+}
+
+fn compute_default_position(app: &AppHandle) -> (i32, i32) {
+    app.primary_monitor()
         .ok()
         .flatten()
         .or_else(|| app.available_monitors().ok().and_then(|m| m.into_iter().next()))
-    {
-        let size = monitor.size();
-        let x = size.width as i32 - 410;
-        let y = 32;
-        let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
-    }
+        .map(|m| (m.size().width as i32 - 410, 32))
+        .unwrap_or((100, 32))
 }
 
 #[cfg(test)]
