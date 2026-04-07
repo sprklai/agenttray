@@ -323,10 +323,13 @@ map_claude_code() {
           write_status "needs-input" "Waiting for permission" "$EVENT" "$MATCHER"
           ;;
         idle_prompt)
-          write_status "needs-input" "Waiting for input" "$EVENT" "$MATCHER"
+          write_status "idle" "Waiting for input" "$EVENT" "$MATCHER"
           ;;
         elicitation_dialog)
           write_status "needs-input" "MCP input requested" "$EVENT" "$MATCHER"
+          ;;
+        auth_success)
+          # Auth succeeded — not user-actionable, ignore
           ;;
         *)
           write_status "needs-input" "Notification: ${MATCHER}" "$EVENT" "$MATCHER"
@@ -334,7 +337,7 @@ map_claude_code() {
       esac
       ;;
     Stop)
-      write_status "needs-input" "Waiting for input" "$EVENT"
+      write_status "idle" "Waiting for input" "$EVENT"
       ;;
     StopFailure)
       write_status "error" "API error" "$EVENT"
