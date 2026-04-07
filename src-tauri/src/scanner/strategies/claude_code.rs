@@ -8,8 +8,7 @@ pub struct ClaudeCodeStrategy;
 /// These patterns match keywords that may appear in the title text.
 const TITLE_PATTERNS: &[TitlePattern] = &[
     // needs-input signals
-    TitlePattern { pattern: "waiting",    status: "needs-input", confidence: 0.9 },
-    TitlePattern { pattern: "approve",    status: "needs-input", confidence: 0.9 },
+    TitlePattern { pattern: "approv",     status: "needs-input", confidence: 0.9 },
     TitlePattern { pattern: "allow",      status: "needs-input", confidence: 0.9 },
     TitlePattern { pattern: "permission", status: "needs-input", confidence: 0.85 },
     TitlePattern { pattern: "yes/no",     status: "needs-input", confidence: 0.85 },
@@ -135,7 +134,17 @@ mod tests {
     }
 
     #[test]
-    fn title_with_waiting_means_needs_input() {
+    fn title_with_waiting_for_input_means_idle() {
+        // "Waiting for input" = idle prompt after task completion, not needs-input
+        let strategy = ClaudeCodeStrategy;
+        let info = make_info(Some("Claude Code - Waiting for input"), None);
+        let state = strategy.detect_state(&info, 0.1, 0);
+        assert_eq!(state.status, "idle");
+    }
+
+    #[test]
+    fn title_with_waiting_for_approval_means_needs_input() {
+        // "approve" pattern still fires for permission requests
         let strategy = ClaudeCodeStrategy;
         let info = make_info(Some("Claude Code - Waiting for approval"), None);
         let state = strategy.detect_state(&info, 10.0, 0);

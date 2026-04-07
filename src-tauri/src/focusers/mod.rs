@@ -10,6 +10,7 @@ pub mod neovim;
 pub mod screen;
 pub mod tmux;
 pub mod vscode;
+pub mod wezterm;
 pub mod zellij;
 
 // IDE focusers
@@ -25,6 +26,7 @@ pub fn dispatch(kind: &str, focus_id: &str, outer_id: &str) -> Result<(), String
         "kitty" => kitty::focus(focus_id, outer_id),
         "tmux" => tmux::focus(focus_id, outer_id),
         "screen" => screen::focus(focus_id, outer_id),
+        "wezterm" => wezterm::focus(focus_id, outer_id),
         "zellij" => zellij::focus(focus_id, outer_id),
         "neovim" => neovim::focus(focus_id, outer_id),
         // IDE terminals

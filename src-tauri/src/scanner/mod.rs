@@ -39,6 +39,11 @@ pub struct Scanner {
     /// re-reading on every scan (important on Windows where env reading
     /// spawns a PowerShell process).
     session_id_cache: HashMap<u32, Option<String>>,
+    /// Per-PID cache for multiplexer/CLI-terminal focus info detected from
+    /// process environment variables (KITTY_WINDOW_ID, WEZTERM_PANE, etc.).
+    /// Cached because env vars are stable for a process's lifetime and
+    /// reading them can be expensive (macOS spawns a `ps` process).
+    multiplexer_cache: HashMap<u32, Option<(String, String, String)>>,
     strategies: Vec<Box<dyn strategies::CliStrategy>>,
 }
 
@@ -76,6 +81,7 @@ impl Scanner {
             prev: HashMap::new(),
             window_cache: HashMap::new(),
             session_id_cache: HashMap::new(),
+            multiplexer_cache: HashMap::new(),
             strategies: strategies::all_strategies(),
         }
     }
@@ -125,10 +131,24 @@ impl Scanner {
                 .unwrap_or("unknown");
 
             // Get terminal info and populate window_title on ProcInfo
-            let terminal = platform::terminal_info(&mut self.window_cache, &p);
+            let mut terminal = platform::terminal_info(&mut self.window_cache, &p);
             if let Some(ref t) = terminal {
                 if p.window_title.is_none() {
                     p.window_title = t.window_title.clone();
+                }
+            }
+
+            // Override kind/focus_id when the agent is running inside a terminal or
+            // multiplexer with a CLI focus API (Kitty, WezTerm, tmux, Zellij, screen).
+            // Env vars are stable for a process's lifetime, so results are cached.
+            if let Some(ref mut t) = terminal {
+                let mux = self.multiplexer_cache
+                    .entry(p.pid)
+                    .or_insert_with(|| detect_multiplexer_focus(p.pid));
+                if let Some((ref kind, ref focus_id, ref outer_id)) = *mux {
+                    t.kind = kind.clone();
+                    t.focus_id = focus_id.clone();
+                    t.outer_id = outer_id.clone();
                 }
             }
 
@@ -217,6 +237,7 @@ impl Scanner {
 
         self.prev.retain(|pid, _| seen.contains(pid));
         self.session_id_cache.retain(|pid, _| seen.contains(pid));
+        self.multiplexer_cache.retain(|pid, _| seen.contains(pid));
         self.window_cache.retain(|pid, _| seen.contains(pid));
         agents
     }
@@ -373,7 +394,7 @@ fn clk_tck() -> u64 {
 fn known_terminal(exe_name: &str) -> Option<&'static str> {
     match exe_name {
         // Cross-platform
-        "warp" | "warp-terminal" => Some("Warp"),
+        "warp" | "warp-terminal" | "Warp.exe" => Some("Warp"),
         "kitty" => Some("Kitty"),
         "alacritty" => Some("Alacritty"),
         "ghostty" | "Ghostty" => Some("Ghostty"),
@@ -404,6 +425,49 @@ fn known_terminal(exe_name: &str) -> Option<&'static str> {
         "powershell.exe" | "powershell" | "pwsh.exe" | "pwsh" => Some("PowerShell"),
         _ => None,
     }
+}
+
+// ===========================================================================
+// Multiplexer / CLI-terminal focus detection via process environment variables.
+// Checks env vars in priority order; first match wins.
+// ===========================================================================
+
+/// Returns `Some((kind, focus_id, outer_id))` if the agent process (identified by
+/// `pid`) is running inside a terminal or multiplexer that has a CLI-based focus
+/// API. Returns `None` if only the generic platform focuser should be used.
+fn detect_multiplexer_focus(pid: u32) -> Option<(String, String, String)> {
+    // Kitty: KITTY_WINDOW_ID is the integer window ID for `kitty @ focus-window`.
+    if let Some(id) = platform::read_proc_env(pid, "KITTY_WINDOW_ID") {
+        if !id.is_empty() {
+            return Some(("kitty".into(), id, String::new()));
+        }
+    }
+    // WezTerm: WEZTERM_PANE is the pane ID for `wezterm cli activate-pane`.
+    if let Some(id) = platform::read_proc_env(pid, "WEZTERM_PANE") {
+        if !id.is_empty() {
+            return Some(("wezterm".into(), id, String::new()));
+        }
+    }
+    // tmux: TMUX_PANE is the pane reference (e.g. "%3"); tmux select-pane accepts this.
+    if let Some(id) = platform::read_proc_env(pid, "TMUX_PANE") {
+        if !id.is_empty() {
+            return Some(("tmux".into(), id, String::new()));
+        }
+    }
+    // Zellij: ZELLIJ_SESSION_NAME is the session name for `zellij attach`.
+    if let Some(id) = platform::read_proc_env(pid, "ZELLIJ_SESSION_NAME") {
+        if !id.is_empty() {
+            return Some(("zellij".into(), id, String::new()));
+        }
+    }
+    // GNU Screen: STY is the session identifier; WINDOW is the window number.
+    if let Some(sty) = platform::read_proc_env(pid, "STY") {
+        if !sty.is_empty() {
+            let win = platform::read_proc_env(pid, "WINDOW").unwrap_or_default();
+            return Some(("screen".into(), sty, win));
+        }
+    }
+    None
 }
 
 #[cfg(test)]

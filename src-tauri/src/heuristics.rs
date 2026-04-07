@@ -10,10 +10,10 @@ const STALE_WORKING_TTL: Duration = Duration::from_secs(30);
 const STALE_PERMISSION_TTL: Duration = Duration::from_secs(60);
 
 /// CPU threshold below which a "working" hook status is suspect.
-const LOW_CPU_THRESHOLD: f64 = 0.5;
+const LOW_CPU_THRESHOLD: f64 = 5.0;
 
 /// CPU threshold above which we override an "idle"/"offline" hook status.
-const HIGH_CPU_THRESHOLD: f64 = 5.0;
+const HIGH_CPU_THRESHOLD: f64 = 10.0;
 
 /// Cross-validate hook-based agent statuses against live process scanner data.
 ///
@@ -44,21 +44,29 @@ pub fn cross_validate(agents: &mut Vec<AgentStatus>, scanned: &[AgentStatus]) {
         let scan_cpu = scan.cpu.unwrap_or(0.0);
 
         match agent.status.as_str() {
-            // needs-input: never override in general, EXCEPT for stale
-            // permission_prompt entries where the follow-up hook likely
-            // didn't fire (common on macOS after granting permission).
+            // needs-input: only permission_prompt and elicitation_dialog are
+            // genuine user-actionable states. All other matchers (unknown
+            // Notification types like quota_warning, context_compact, etc.)
+            // can fire after Stop and spuriously overwrite an idle status —
+            // clear them once stale. Permission prompts are only cleared if
+            // the process has resumed (CPU active), meaning the permission
+            // was silently granted (common on macOS).
             "needs-input" => {
-                let is_permission_prompt =
-                    agent.hook_matcher.as_deref() == Some("permission_prompt");
-                if is_permission_prompt {
-                    let is_stale = agent.mtime
-                        .and_then(|mt| now.duration_since(mt).ok())
-                        .map(|age| age > STALE_PERMISSION_TTL)
-                        .unwrap_or(false);
+                let matcher = agent.hook_matcher.as_deref().unwrap_or("");
+                let is_genuine = matcher == "permission_prompt"
+                    || matcher == "elicitation_dialog";
+                let is_stale = agent.mtime
+                    .and_then(|mt| now.duration_since(mt).ok())
+                    .map(|age| age > STALE_PERMISSION_TTL)
+                    .unwrap_or(false);
+                if is_genuine {
                     if is_stale && scan_cpu > LOW_CPU_THRESHOLD {
                         agent.status = "working".to_string();
                         agent.message = "Running tool...".to_string();
                     }
+                } else if is_stale {
+                    agent.status = "idle".to_string();
+                    agent.message = "Waiting for input".to_string();
                 }
             }
             "working" | "starting" => {
@@ -222,13 +230,15 @@ mod tests {
     }
 
     #[test]
-    fn needs_input_never_overridden() {
+    fn non_genuine_stale_needs_input_cleared_to_idle() {
+        // hook_matcher=None means unknown/non-genuine source — stale entries
+        // should be downgraded to idle regardless of CPU.
         let old_mtime = SystemTime::now() - Duration::from_secs(120);
         let mut agents = vec![hook_agent("needs-input", "claude-code", "0x1234", Some(old_mtime))];
         let scanned = vec![scan_agent("claude-code", "0x1234", 0.0)];
 
         cross_validate(&mut agents, &scanned);
-        assert_eq!(agents[0].status, "needs-input");
+        assert_eq!(agents[0].status, "idle");
     }
 
     #[test]
@@ -301,7 +311,7 @@ mod tests {
             "needs-input", "claude-code", "0x1234",
             Some("permission_prompt"), Some(old_mtime),
         )];
-        let scanned = vec![scan_agent("claude-code", "0x1234", 3.0)]; // CPU active
+        let scanned = vec![scan_agent("claude-code", "0x1234", 6.0)]; // CPU active (above LOW_CPU_THRESHOLD)
 
         cross_validate(&mut agents, &scanned);
         assert_eq!(agents[0].status, "working");
@@ -322,16 +332,31 @@ mod tests {
     }
 
     #[test]
-    fn non_permission_needs_input_never_cleared() {
-        // Other needs-input types (idle_prompt, etc.) are never auto-cleared.
+    fn non_genuine_needs_input_cleared_when_stale() {
+        // Spurious Notification types (quota_warning, unknown, etc.) that
+        // wrote needs-input should be downgraded to idle once stale.
         let old_mtime = SystemTime::now() - Duration::from_secs(90);
         let mut agents = vec![hook_agent_with_matcher(
             "needs-input", "claude-code", "0x1234",
-            Some("idle_prompt"), Some(old_mtime),
+            Some("quota_warning"), Some(old_mtime),
         )];
-        let scanned = vec![scan_agent("claude-code", "0x1234", 3.0)];
+        let scanned = vec![scan_agent("claude-code", "0x1234", 0.0)];
 
         cross_validate(&mut agents, &scanned);
-        assert_eq!(agents[0].status, "needs-input"); // idle_prompt not affected
+        assert_eq!(agents[0].status, "idle");
+    }
+
+    #[test]
+    fn non_genuine_needs_input_kept_when_fresh() {
+        // Even a non-genuine needs-input should be kept if still fresh.
+        let fresh_mtime = SystemTime::now();
+        let mut agents = vec![hook_agent_with_matcher(
+            "needs-input", "claude-code", "0x1234",
+            Some("quota_warning"), Some(fresh_mtime),
+        )];
+        let scanned = vec![scan_agent("claude-code", "0x1234", 0.0)];
+
+        cross_validate(&mut agents, &scanned);
+        assert_eq!(agents[0].status, "needs-input");
     }
 }

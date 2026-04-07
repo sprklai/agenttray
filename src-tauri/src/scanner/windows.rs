@@ -15,7 +15,7 @@ pub fn find_cli_processes<'a>(
         .chain(SCRIPT_RUNTIMES.iter().copied())
         .collect();
     if all_names.is_empty() {
-        return Vec::new();
+        return (Vec::new(), HashMap::new());
     }
 
     // Query all potential agent processes in one wmic call
@@ -116,12 +116,22 @@ pub fn find_cli_processes<'a>(
     (out, ppid_map)
 }
 
+/// Console-subsystem processes (shells) that may appear in the parent chain
+/// before the actual GUI terminal emulator. We keep walking when we hit one
+/// of these so that we find the outer GUI host (e.g. Windows Terminal) instead
+/// of stopping at PowerShell and getting a zero MainWindowHandle.
+fn is_console_shell(label: &str) -> bool {
+    matches!(label, "PowerShell" | "CMD")
+}
+
 pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalInfo> {
     let mut cur = p.ppid;
     let mut term_label = String::new();
     let mut term_pid: u32 = 0;
 
-    // Walk parent process chain to find the terminal emulator
+    // Walk parent process chain to find the terminal emulator.
+    // Continue past console-only shells (PowerShell, cmd) to find the outer
+    // GUI host (e.g. Windows Terminal) which has a valid MainWindowHandle.
     for _ in 0..6 {
         if cur <= 1 {
             break;
@@ -149,9 +159,18 @@ pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalIn
 
         let exe_name = cols[1].trim();
         if let Some(label) = known_terminal(exe_name) {
-            term_label = label.to_string();
-            term_pid = cur;
-            break;
+            if is_console_shell(label) {
+                // Keep this as a fallback but continue walking for a GUI host
+                if term_pid == 0 {
+                    term_label = label.to_string();
+                    term_pid = cur;
+                }
+            } else {
+                // GUI terminal emulator — prefer this over any previous shell match
+                term_label = label.to_string();
+                term_pid = cur;
+                break;
+            }
         }
 
         cur = cols[2].trim().parse().unwrap_or(0);

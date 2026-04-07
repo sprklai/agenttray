@@ -367,7 +367,9 @@ map_claude_code() {
           # Auth succeeded — not user-actionable, ignore
           ;;
         *)
-          write_status "needs-input" "Notification: ${MATCHER}" "$EVENT" "$MATCHER"
+          # Unknown notification types (quota_warning, context_compact, rate_limit, etc.)
+          # are informational only — not user-actionable. Ignore to avoid overwriting
+          # a valid "idle" state written by the preceding Stop event.
           ;;
       esac
       ;;
