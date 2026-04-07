@@ -402,6 +402,15 @@ map_claude_code() {
     SubagentStop)
       write_status "working" "Subagent completed" "$EVENT"
       ;;
+    TaskCompleted)
+      # A task was marked complete; the session likely continues.
+      # Write "working" so a lingering needs-input from earlier is overwritten.
+      write_status "working" "Task completed" "$EVENT"
+      ;;
+    TeammateIdle)
+      # A subagent teammate is about to go idle; orchestrator is still active.
+      write_status "working" "Teammate idle" "$EVENT"
+      ;;
     SessionEnd)
       # Only delete from the root session; a subagent SessionEnd must not
       # remove the parent's status file.

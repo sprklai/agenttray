@@ -6,8 +6,9 @@ use crate::watcher::AgentStatus;
 const STALE_WORKING_TTL: Duration = Duration::from_secs(30);
 
 /// How long a permission_prompt needs-input can stay unacknowledged before
-/// we assume the permission was granted but the follow-up hook didn't fire.
-const STALE_PERMISSION_TTL: Duration = Duration::from_secs(60);
+/// we assume the session has moved on (either the permission was granted or
+/// the task completed without a follow-up hook clearing the state).
+const STALE_PERMISSION_TTL: Duration = Duration::from_secs(30);
 
 /// CPU threshold below which a "working" hook status is suspect.
 const LOW_CPU_THRESHOLD: f64 = 5.0;
@@ -59,12 +60,17 @@ pub fn cross_validate(agents: &mut Vec<AgentStatus>, scanned: &[AgentStatus]) {
                     .and_then(|mt| now.duration_since(mt).ok())
                     .map(|age| age > STALE_PERMISSION_TTL)
                     .unwrap_or(false);
-                if is_genuine {
-                    if is_stale && scan_cpu > LOW_CPU_THRESHOLD {
+                if is_genuine && is_stale {
+                    if scan_cpu > LOW_CPU_THRESHOLD {
+                        // CPU active → permission was silently granted, process resumed
                         agent.status = "working".to_string();
                         agent.message = "Running tool...".to_string();
+                    } else {
+                        // CPU idle → task is done; stale permission prompt is moot
+                        agent.status = "idle".to_string();
+                        agent.message = "Waiting for input".to_string();
                     }
-                } else if is_stale {
+                } else if !is_genuine && is_stale {
                     agent.status = "idle".to_string();
                     agent.message = "Waiting for input".to_string();
                 }
@@ -287,7 +293,7 @@ mod tests {
     #[test]
     fn stale_permission_prompt_cleared_when_process_active() {
         // Simulates macOS case: permission granted, PreToolUse hook didn't fire.
-        let old_mtime = SystemTime::now() - Duration::from_secs(90);
+        let old_mtime = SystemTime::now() - Duration::from_secs(45);
         let mut agents = vec![hook_agent_with_matcher(
             "needs-input", "claude-code", "0x1234",
             Some("permission_prompt"), Some(old_mtime),
@@ -296,6 +302,21 @@ mod tests {
 
         cross_validate(&mut agents, &scanned);
         assert_eq!(agents[0].status, "working");
+    }
+
+    #[test]
+    fn stale_permission_prompt_cleared_to_idle_when_cpu_low() {
+        // Task completed, but permission_prompt notification raced past Stop.
+        // After STALE_PERMISSION_TTL with low CPU, should resolve to idle.
+        let old_mtime = SystemTime::now() - Duration::from_secs(45);
+        let mut agents = vec![hook_agent_with_matcher(
+            "needs-input", "claude-code", "0x1234",
+            Some("permission_prompt"), Some(old_mtime),
+        )];
+        let scanned = vec![scan_agent("claude-code", "0x1234", 0.5)]; // CPU idle
+
+        cross_validate(&mut agents, &scanned);
+        assert_eq!(agents[0].status, "idle");
     }
 
     #[test]

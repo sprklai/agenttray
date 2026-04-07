@@ -11,11 +11,10 @@
   import Pin from '@lucide/svelte/icons/pin';
   import PinOff from '@lucide/svelte/icons/pin-off';
 
-  // Window width and max list rows before scroll kicks in
+  // Window width — height is fully responsive, capped to available screen height
   const WIN_W = 400;
-  const MAX_VISIBLE = 5;
-  const ROW_H = 48;
-  const MAX_LIST_H = MAX_VISIBLE * ROW_H; // 240px cap, then scroll
+  const SCREEN_H = screen.availHeight;
+  const MAX_WIN_H = SCREEN_H - 16; // 8px breathing room top + bottom
 
   let agents = $state<AgentStatus[]>([]);
   let pinned = $state(false);
@@ -26,15 +25,20 @@
   // Panel ref for ResizeObserver-based window sizing
   let panelEl = $state<HTMLDivElement | null>(null);
 
-  // Auto-resize window to match actual rendered panel height
+  // Auto-resize window to match actual rendered panel height.
+  // prevH guards against redundant setSize calls: on macOS, every setSize
+  // triggers a WKWebView backdrop-filter recomposition causing visible flicker.
   $effect(() => {
     if (!panelEl) return;
+    let prevH = 0;
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) return;
       // borderBoxSize includes border but not margin; add 8px for m-[4px] × 2
       const borderBoxH = entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height + 2;
-      const totalH = Math.round(borderBoxH) + 8;
+      const totalH = Math.min(Math.round(borderBoxH) + 8, MAX_WIN_H);
+      if (totalH === prevH) return;
+      prevH = totalH;
       getCurrentWindow().setSize(new LogicalSize(WIN_W, totalH));
     });
     observer.observe(panelEl);
@@ -151,9 +155,10 @@
   }
 </script>
 
-<div bind:this={panelEl} class="glass-panel glass-noise relative w-[392px] rounded-[14px] overflow-hidden m-[4px]">
+<div bind:this={panelEl} class="glass-panel glass-noise relative w-[392px] rounded-[14px] overflow-hidden m-[4px] flex flex-col"
+     style="max-height: {MAX_WIN_H - 8}px;">
   <!-- Header (drag region) -->
-  <div data-tauri-drag-region class="flex items-center justify-between px-3.5 py-2.5 border-b border-white/[0.06]"
+  <div data-tauri-drag-region class="flex items-center justify-between px-3.5 py-2.5 border-b border-white/[0.06] shrink-0"
        style="background: rgba(255,255,255,0.03);">
     <span data-tauri-drag-region class="text-[10px] font-semibold tracking-widest uppercase text-[#8a8880]">AgentTray</span>
     <div class="flex items-center gap-1.5">
@@ -174,12 +179,12 @@
 
   <!-- Error toasts -->
   {#if focusError}
-    <div class="px-3 py-1.5 bg-[#3a2020] border-b border-red-500/20 text-[10px] text-red-400 truncate">
+    <div class="px-3 py-1.5 bg-[#3a2020] border-b border-red-500/20 text-[10px] text-red-400 truncate shrink-0">
       {focusError}
     </div>
   {/if}
   {#if ipcError}
-    <div class="px-3 py-1.5 bg-[#3a2020] border-b border-red-500/20 text-[10px] text-red-400 truncate">
+    <div class="px-3 py-1.5 bg-[#3a2020] border-b border-red-500/20 text-[10px] text-red-400 truncate shrink-0">
       {ipcError}
     </div>
   {/if}
@@ -190,7 +195,7 @@
       No agents detected.<br/>See {statusDir}
     </p>
   {:else}
-    <ul class="py-1 m-0 p-0 glass-scroll" style="max-height: {MAX_LIST_H}px; overflow-y: auto; overflow-x: hidden;">
+    <ul class="py-1 m-0 p-0 glass-scroll flex-1 min-h-0 overflow-y-auto">
       {#each agents as agent (agent.id)}
         <AgentRow {agent} onFocus={() => focusAgent(agent)} />
       {/each}
