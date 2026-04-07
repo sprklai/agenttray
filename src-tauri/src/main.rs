@@ -96,7 +96,7 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![focus::focus_terminal, watcher::get_agents, watcher::get_status_dir, watcher::install_hooks, tray::toggle_pin])
+        .invoke_handler(tauri::generate_handler![focus::focus_terminal, watcher::get_agents, watcher::get_status_dir, watcher::install_hooks, tray::toggle_pin, tray::close_popup])
         .build(tauri::generate_context!())
         .expect("AgentTray failed to build")
         .run(|_app, event| {

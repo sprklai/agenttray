@@ -82,6 +82,18 @@ impl Scanner {
 
     pub fn scan(&mut self) -> Vec<AgentStatus> {
         let procs = platform::find_cli_processes(&self.strategies);
+
+        // Filter out subprocess agents: if a matched process's parent is also a
+        // matched CLI process, it's a subagent or tool child — not a user-level
+        // session. Build the set of all matched PIDs first so transitive
+        // descendants are also caught (child-of-child shares the same set).
+        let matched_pids: std::collections::HashSet<u32> =
+            procs.iter().map(|(p, _)| p.pid).collect();
+        let procs: Vec<_> = procs
+            .into_iter()
+            .filter(|(p, _)| !matched_pids.contains(&p.ppid))
+            .collect();
+
         let mut agents: Vec<AgentStatus> = Vec::new();
         let mut seen = std::collections::HashSet::new();
         // Track which tty_labels we've already emitted to avoid duplicate IDs

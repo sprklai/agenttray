@@ -96,7 +96,7 @@
       // toggle causes a brief focus/blur cycle that would immediately hide the popup
       const BLUR_DEBOUNCE_MS = 300;
       cleanups.push(await win.onFocusChanged(({ payload: focused }) => {
-        if (!focused && !pinned && Date.now() - showTime > BLUR_DEBOUNCE_MS) win.hide();
+        if (!focused && !pinned && Date.now() - showTime > BLUR_DEBOUNCE_MS) invoke('close_popup');
       }));
     })();
 
@@ -117,7 +117,7 @@
           outer_id: agent.terminal.outer_id,
         }
       });
-      if (!pinned) getCurrentWindow().hide();
+      if (!pinned) invoke('close_popup');
     } catch (e) {
       focusError = String(e);
       setTimeout(() => { focusError = ''; }, 4000);
