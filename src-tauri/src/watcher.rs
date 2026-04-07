@@ -171,7 +171,12 @@ pub fn parse_status_file(path: &Path) -> Option<AgentStatus> {
 /// How long an offline/error status file can sit untouched before we hide it.
 const STALE_TTL: Duration = Duration::from_secs(10 * 60); // 10 minutes
 
-fn read_all(dir: &Path) -> Vec<AgentStatus> {
+/// How long to wait after a hook file's last write before considering it
+/// orphaned when no matching live process exists.  This grace period avoids
+/// deleting files during brief process transitions (e.g. between hook events).
+const ORPHAN_GRACE: Duration = Duration::from_secs(15);
+
+fn read_all(dir: &Path) -> Vec<(PathBuf, AgentStatus)> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return Vec::new(),
@@ -179,7 +184,7 @@ fn read_all(dir: &Path) -> Vec<AgentStatus> {
 
     let now = std::time::SystemTime::now();
 
-    let mut agents: Vec<AgentStatus> = entries
+    let mut agents: Vec<(PathBuf, AgentStatus)> = entries
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let path = entry.path();
@@ -208,11 +213,15 @@ fn read_all(dir: &Path) -> Vec<AgentStatus> {
                 }
             }
 
-            Some(agent)
+            Some((path, agent))
         })
         .collect();
 
-    sort_agents(&mut agents);
+    agents.sort_by(|(_, a), (_, b)| {
+        let pa = status_priority_num(&a.status);
+        let pb = status_priority_num(&b.status);
+        pa.cmp(&pb).then_with(|| a.name.cmp(&b.name))
+    });
     agents
 }
 
@@ -356,7 +365,65 @@ fn source_priority(source: Option<&str>) -> u8 {
 }
 
 fn read_and_emit_merged(app: &AppHandle, dir: &Path, scanned: &[AgentStatus]) {
-    let file_agents = read_all(dir);
+    let file_agents_with_paths = read_all(dir);
+
+    // Collect live session IDs from scanned processes for orphan detection.
+    // Also track CLI types whose session IDs could not be read (read_proc_env
+    // can fail due to SIP, timing, etc.).  When a CLI type has unidentified
+    // processes we cannot safely orphan-check its hook files.
+    let live_session_ids: std::collections::HashSet<&str> = scanned
+        .iter()
+        .filter_map(|a| a.session_id.as_deref())
+        .collect();
+    let unidentified_clis: std::collections::HashSet<&str> = scanned
+        .iter()
+        .filter(|a| a.session_id.is_none())
+        .filter_map(|a| a.cli.as_deref())
+        .collect();
+
+    // Remove orphaned hook files: hook-sourced files whose session_id
+    // doesn't match any live process and whose mtime exceeds the grace
+    // period.  This catches sessions that exited without sending SessionEnd.
+    // Skip cleanup for CLI types where the scanner has processes with
+    // unknown session IDs — we can't be sure those aren't the same session.
+    let now = std::time::SystemTime::now();
+    let file_agents_with_paths: Vec<_> = file_agents_with_paths
+        .into_iter()
+        .filter(|(path, agent)| {
+            let is_hook = agent.source.as_deref() == Some("hook");
+            let has_session = agent.session_id.is_some();
+            let cli_identifiable = agent
+                .cli
+                .as_deref()
+                .map(|c| !unidentified_clis.contains(c))
+                .unwrap_or(false);
+            let session_live = agent
+                .session_id
+                .as_deref()
+                .map(|sid| live_session_ids.contains(sid))
+                .unwrap_or(false);
+
+            if is_hook && has_session && cli_identifiable && !session_live {
+                let age = agent.mtime
+                    .and_then(|mt| now.duration_since(mt).ok())
+                    .unwrap_or_default();
+                if age > ORPHAN_GRACE {
+                    if let Err(e) = std::fs::remove_file(path) {
+                        log::warn!("Failed to clean up orphaned hook file {:?}: {}", path, e);
+                    } else {
+                        log::info!("Cleaned up orphaned hook file: {:?} (session {} not found in live processes)", path, agent.session_id.as_deref().unwrap_or("?"));
+                    }
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+
+    let file_agents: Vec<AgentStatus> = file_agents_with_paths
+        .into_iter()
+        .map(|(_, a)| a)
+        .collect();
 
     // Dedup file agents: when multiple files share the same focus_id
     // AND have different source priorities, keep the higher-priority one
