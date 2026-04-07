@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::image::Image;
 use tauri::webview::WebviewWindowBuilder;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl};
+use tauri::{AppHandle, Emitter, Listener, Manager, WebviewUrl};
 use tauri::tray::TrayIconId;
 use tauri::webview::Color;
 
@@ -131,11 +131,12 @@ pub fn toggle_popup(app: &AppHandle) {
             }
             let _ = win.show();
             let _ = win.set_focus();
-            // Emit after a short delay so the WebView has time to
-            // load and register its event listeners
+            // Emit current state once the frontend signals it has registered
+            // its event listeners. The frontend emits 'popup-ready' from
+            // onMount after all listeners are active. This avoids the race
+            // between WebView load time and state emission.
             let h = app.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(500));
+            app.once("popup-ready", move |_| {
                 emit_current_state(&h);
             });
         }

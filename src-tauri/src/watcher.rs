@@ -184,7 +184,7 @@ fn read_all(dir: &Path) -> Vec<(PathBuf, AgentStatus)> {
 
     let now = std::time::SystemTime::now();
 
-    let mut agents: Vec<(PathBuf, AgentStatus)> = entries
+    let agents: Vec<(PathBuf, AgentStatus)> = entries
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let path = entry.path();
@@ -217,11 +217,6 @@ fn read_all(dir: &Path) -> Vec<(PathBuf, AgentStatus)> {
         })
         .collect();
 
-    agents.sort_by(|(_, a), (_, b)| {
-        let pa = status_priority_num(&a.status);
-        let pb = status_priority_num(&b.status);
-        pa.cmp(&pb).then_with(|| a.name.cmp(&b.name))
-    });
     agents
 }
 
@@ -514,64 +509,69 @@ pub fn watch(app: AppHandle) {
 
     let mut scanner = Scanner::new();
     let scan_interval = Duration::from_secs(2);
-    let mut last_scan = Instant::now();
 
     // Initial emit with first scan
     let scanned = scanner.scan();
     read_and_emit_merged(&app, &dir, &scanned);
+    let mut latest_scan = scanned;
 
-    // Set up file watcher
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
-        Ok(w) => w,
-        Err(e) => {
-            log::error!("Failed to create file watcher: {}", e);
-            log::info!("Falling back to scan-only mode");
-            loop {
-                std::thread::sleep(scan_interval);
-                let scanned = scanner.scan();
-                read_and_emit_merged(&app, &dir, &scanned);
-            }
-        }
-    };
-
-    if let Err(e) = watcher.watch(&dir, RecursiveMode::NonRecursive) {
-        log::error!("Failed to watch {:?}: {}", dir, e);
-        return;
-    }
-
-    log::info!("Watching {:?} + scanning /proc for live agents", dir);
-
-    let debounce = Duration::from_millis(50);
-    let mut last_emit = Instant::now() - debounce;
-    let mut latest_scan: Vec<AgentStatus> = scanned;
-
+    // Outer restart loop: recreates the file watcher whenever the channel
+    // disconnects (e.g. inotify watch limit exhausted, OS resource pressure).
+    // Scanner state (CPU history, caches) is preserved across restarts.
     loop {
-        match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Ok(event)) => {
-                if matches!(
-                    event.kind,
-                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-                ) && last_emit.elapsed() >= debounce
-                {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
+            Ok(w) => w,
+            Err(e) => {
+                log::error!("Failed to create file watcher: {}", e);
+                log::info!("Falling back to scan-only mode");
+                loop {
+                    std::thread::sleep(scan_interval);
+                    latest_scan = scanner.scan();
                     read_and_emit_merged(&app, &dir, &latest_scan);
-                    last_emit = Instant::now();
                 }
             }
-            Ok(Err(e)) => log::warn!("Watch error: {}", e),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                log::error!("File watcher channel disconnected");
-                break;
-            }
+        };
+
+        if let Err(e) = watcher.watch(&dir, RecursiveMode::NonRecursive) {
+            log::error!("Failed to watch {:?}: {}", dir, e);
+            return;
         }
 
-        // Periodic process scan
-        if last_scan.elapsed() >= scan_interval {
-            latest_scan = scanner.scan();
-            read_and_emit_merged(&app, &dir, &latest_scan);
-            last_scan = Instant::now();
-            last_emit = Instant::now();
+        log::info!("Watching {:?} + scanning /proc for live agents", dir);
+
+        let debounce = Duration::from_millis(50);
+        let mut last_emit = Instant::now() - debounce;
+        let mut last_scan = Instant::now();
+
+        loop {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(Ok(event)) => {
+                    if matches!(
+                        event.kind,
+                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                    ) && last_emit.elapsed() >= debounce
+                    {
+                        read_and_emit_merged(&app, &dir, &latest_scan);
+                        last_emit = Instant::now();
+                    }
+                }
+                Ok(Err(e)) => log::warn!("Watch error: {}", e),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    log::warn!("File watcher channel disconnected, restarting watcher in 2s");
+                    std::thread::sleep(Duration::from_secs(2));
+                    break; // break inner loop → restart outer loop
+                }
+            }
+
+            // Periodic process scan
+            if last_scan.elapsed() >= scan_interval {
+                latest_scan = scanner.scan();
+                read_and_emit_merged(&app, &dir, &latest_scan);
+                last_scan = Instant::now();
+                last_emit = Instant::now();
+            }
         }
     }
 }

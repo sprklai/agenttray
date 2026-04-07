@@ -128,25 +128,6 @@ fn find_scanner_match<'a>(agent: &AgentStatus, scanned: &'a [AgentStatus]) -> Op
     None
 }
 
-/// Read I/O counters from /proc/{pid}/io (Linux only).
-/// Returns (read_bytes, write_bytes) for delta-based activity detection.
-#[cfg(target_os = "linux")]
-#[allow(dead_code)]
-pub fn proc_io(pid: u32) -> Option<(u64, u64)> {
-    let content = std::fs::read_to_string(format!("/proc/{}/io", pid)).ok()?;
-    let mut read = 0u64;
-    let mut write = 0u64;
-    for line in content.lines() {
-        if let Some(val) = line.strip_prefix("read_bytes: ") {
-            read = val.trim().parse().unwrap_or(0);
-        }
-        if let Some(val) = line.strip_prefix("write_bytes: ") {
-            write = val.trim().parse().unwrap_or(0);
-        }
-    }
-    Some((read, write))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

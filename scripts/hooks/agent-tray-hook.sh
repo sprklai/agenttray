@@ -284,7 +284,7 @@ build_terminal_json() {
     for i in 1 2 3 4 5 6; do
       [ -z "$walk_pid" ] || [ "$walk_pid" = "1" ] || [ "$walk_pid" = "0" ] && break
       local wid
-      wid=$(xdotool search --pid "$walk_pid" 2>/dev/null | head -1 || true)
+      wid=$(timeout 2 xdotool search --pid "$walk_pid" 2>/dev/null | head -1 || true)
       if [ -n "$wid" ]; then
         focus_id=$(printf '0x%x' "$wid")
         kind="x11_generic"
@@ -302,8 +302,14 @@ build_terminal_json() {
     done
   fi
 
-  printf '{"kind":"%s","focus_id":"%s","outer_id":"%s","label":"%s","window_title":"%s"}' \
-    "${kind}" "${focus_id}" "${outer_id}" "${label}" "${window_title}"
+  local safe_kind safe_focus safe_outer safe_label safe_title
+  safe_kind=$(json_str "${kind}")
+  safe_focus=$(json_str "${focus_id}")
+  safe_outer=$(json_str "${outer_id}")
+  safe_label=$(json_str "${label}")
+  safe_title=$(json_str "${window_title}")
+  printf '{"kind":%s,"focus_id":%s,"outer_id":%s,"label":%s,"window_title":%s}' \
+    "${safe_kind}" "${safe_focus}" "${safe_outer}" "${safe_label}" "${safe_title}"
 }
 
 TERMINAL_JSON=$(build_terminal_json)

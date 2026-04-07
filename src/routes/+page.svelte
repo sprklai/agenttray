@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listen } from '@tauri-apps/api/event';
+  import { listen, emit } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { LogicalSize } from '@tauri-apps/api/dpi';
@@ -67,10 +67,15 @@
         pinned = event.payload;
       }));
 
-      // Now fetch cached state (listener is already active for any updates)
+      // Signal to Rust that listeners are active. On first open, Rust's
+      // once('popup-ready') handler responds with emit_current_state, which
+      // pushes agents via the agents-updated event we just registered.
+      await emit('popup-ready', null);
+
+      // Also fetch directly as an immediate synchronous fill — covers edge
+      // cases (e.g. popup reshown without full JS reload, HMR state loss).
       try {
         const result = await invoke<AgentStatus[]>('get_agents');
-        console.log('[AgentTray] get_agents returned', result.length, 'agents');
         agents = result;
       } catch (e) {
         ipcError = `IPC error: ${e}`;
@@ -83,14 +88,17 @@
         await new Promise(r => setTimeout(r, 600));
         try {
           const retry = await invoke<AgentStatus[]>('get_agents');
-          console.log('[AgentTray] retry get_agents returned', retry.length, 'agents');
           if (retry.length > 0) agents = retry;
-        } catch {}
+        } catch (e) {
+          console.warn('[AgentTray] retry get_agents failed:', e);
+        }
       }
 
       try {
         statusDir = await invoke<string>('get_status_dir') || statusDir;
-      } catch {}
+      } catch (e) {
+        console.warn('[AgentTray] get_status_dir failed:', e);
+      }
 
       const win = getCurrentWindow();
       let showTime = Date.now();
@@ -100,7 +108,9 @@
         showTime = Date.now();
         try {
           agents = await invoke<AgentStatus[]>('get_agents');
-        } catch {}
+        } catch (e) {
+          console.warn('[AgentTray] get_agents on focus failed:', e);
+        }
       }));
 
       // Ignore blur events within 300ms of focus — the global shortcut

@@ -50,11 +50,12 @@ ensure_json_file() {
   fi
 }
 
-# Atomic write: write to .tmp then mv
+# Atomic write: write to PID-qualified .tmp then mv (avoids collision if
+# two installer instances run concurrently)
 atomic_write() {
   local file="$1" content="$2"
-  printf '%s\n' "$content" > "${file}.tmp"
-  mv -f "${file}.tmp" "$file"
+  printf '%s\n' "$content" > "${file}.tmp.$$"
+  mv -f "${file}.tmp.$$" "$file"
 }
 
 # Deploy hook script(s) to ~/.agent-monitor/hooks/

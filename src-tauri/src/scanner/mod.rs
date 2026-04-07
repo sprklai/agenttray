@@ -302,42 +302,54 @@ fn count_children(pid: u32, excluded: &[&str]) -> u32 {
         Err(_) => return 0,
     };
 
-    let child_pids = String::from_utf8_lossy(&output.stdout);
+    let child_pids: Vec<&str> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>();
 
-    if excluded.is_empty() {
-        return child_pids.lines().filter(|l| !l.trim().is_empty()).count() as u32;
+    if excluded.is_empty() || child_pids.is_empty() {
+        return child_pids.len() as u32;
     }
 
-    child_pids
+    // Batch all child PIDs into a single `ps` call instead of one per child.
+    let pid_list = child_pids.join(",");
+    let ps_out = match std::process::Command::new("ps")
+        .args(["-o", "pid=,command=", "-p", &pid_list])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return child_pids.len() as u32,
+    };
+    let ps_text = String::from_utf8_lossy(&ps_out.stdout);
+
+    // ps output: one line per matched PID ("  PID command...")
+    // Count lines whose command does NOT match any excluded substring.
+    ps_text
         .lines()
-        .filter(|pid_str| {
-            let pid_str = pid_str.trim();
-            if pid_str.is_empty() {
+        .filter(|line| {
+            let line = line.trim();
+            if line.is_empty() {
                 return false;
             }
-            let Ok(ps_out) = std::process::Command::new("ps")
-                .args(["-o", "command=", "-p", pid_str])
-                .output()
-            else {
-                return true;
-            };
-            let cmdline = String::from_utf8_lossy(&ps_out.stdout);
-            !excluded.iter().any(|exc| cmdline.contains(exc))
+            // Skip the PID field; everything after the first whitespace is the command.
+            let cmd = line.splitn(2, char::is_whitespace).nth(1).unwrap_or(line);
+            !excluded.iter().any(|exc| cmd.contains(exc))
         })
         .count() as u32
 }
 
 #[cfg(target_os = "windows")]
 fn count_children(pid: u32, _excluded: &[&str]) -> u32 {
-    std::process::Command::new("wmic")
-        .args(["process", "where", &format!("ParentProcessId={}", pid), "get", "ProcessId", "/FORMAT:CSV"])
+    // wmic is removed in Windows 11 24H2+; use Get-CimInstance instead.
+    let script = format!(
+        "(Get-CimInstance Win32_Process -Filter 'ParentProcessId={pid}').Count"
+    );
+    std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script])
         .output()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.trim().is_empty() && !l.contains("Node"))
-                .count() as u32
-        })
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u32>().ok())
         .unwrap_or(0)
 }
 
