@@ -1,6 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::time::Instant;
+
+/// Number of CPU samples to average for state smoothing (~8 s at the 2-second scan interval).
+const CPU_SMOOTHING_WINDOW: usize = 4;
+/// CPU% threshold for marking a process as recently active (used for `last_active` tracking).
+const CPU_ACTIVE_THRESHOLD: f64 = 2.0;
 
 use crate::watcher::AgentStatus;
 
@@ -25,6 +30,8 @@ struct CpuSnapshot {
     when: Instant,
     /// Last time this process had significant CPU activity.
     last_active: Option<Instant>,
+    /// Rolling window of recent raw CPU% samples for smoothing.
+    cpu_history: VecDeque<f64>,
 }
 
 /// Per-terminal-PID cache for window IDs (shared across platforms).
@@ -109,8 +116,19 @@ impl Scanner {
         for (mut p, strategy) in procs {
             seen.insert(p.pid);
 
-            let cpu_pct = self.cpu_pct(&p);
-            let is_active = cpu_pct > 2.0;
+            // Compute raw instantaneous CPU%, then smooth with a rolling window
+            // to avoid state flipping on transient spikes or dips.
+            let instant_cpu = self.cpu_pct(&p);
+            let mut history = self.prev
+                .get(&p.pid)
+                .map(|s| s.cpu_history.clone())
+                .unwrap_or_default();
+            history.push_back(instant_cpu);
+            if history.len() > CPU_SMOOTHING_WINDOW {
+                history.pop_front();
+            }
+            let cpu_pct = history.iter().copied().sum::<f64>() / history.len() as f64;
+            let is_active = cpu_pct > CPU_ACTIVE_THRESHOLD;
 
             // Carry forward last_active from previous snapshot.
             // New processes start with last_active = now so they default
@@ -231,6 +249,7 @@ impl Scanner {
                     total_ticks: p.utime + p.stime,
                     when: Instant::now(),
                     last_active,
+                    cpu_history: history,
                 },
             );
         }
