@@ -43,16 +43,27 @@
 
   onMount(() => {
     const cleanups: Array<() => void> = [];
+    let mounted = true;
+
+    /** Register a listener, auto-cleaning if the component already unmounted. */
+    async function addListener<T>(unlisten: Promise<() => void>) {
+      const fn = await unlisten;
+      if (mounted) {
+        cleanups.push(fn);
+      } else {
+        fn(); // component unmounted while awaiting — immediately unsubscribe
+      }
+    }
 
     (async () => {
       // Register listeners FIRST to avoid missing events between
       // get_agents() and listener registration (race condition fix)
-      cleanups.push(await listen<AgentStatus[]>('agents-updated', (event) => {
+      await addListener(listen<AgentStatus[]>('agents-updated', (event) => {
         agents = event.payload;
         ipcError = ''; // clear any previous error on successful event
       }));
 
-      cleanups.push(await listen<boolean>('pinned-changed', (event) => {
+      await addListener(listen<boolean>('pinned-changed', (event) => {
         pinned = event.payload;
       }));
 
@@ -85,7 +96,7 @@
       let showTime = Date.now();
 
       // Re-fetch agents when popup is shown (also works around HMR state loss)
-      cleanups.push(await listen('tauri://focus', async () => {
+      await addListener(listen('tauri://focus', async () => {
         showTime = Date.now();
         try {
           agents = await invoke<AgentStatus[]>('get_agents');
@@ -95,12 +106,15 @@
       // Ignore blur events within 300ms of focus — the global shortcut
       // toggle causes a brief focus/blur cycle that would immediately hide the popup
       const BLUR_DEBOUNCE_MS = 300;
-      cleanups.push(await win.onFocusChanged(({ payload: focused }) => {
+      await addListener(win.onFocusChanged(({ payload: focused }) => {
         if (!focused && !pinned && Date.now() - showTime > BLUR_DEBOUNCE_MS) invoke('close_popup');
       }));
     })();
 
-    return () => cleanups.forEach(fn => fn());
+    return () => {
+      mounted = false;
+      cleanups.forEach(fn => fn());
+    };
   });
 
   let focusing = $state(false);

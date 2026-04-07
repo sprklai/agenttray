@@ -81,17 +81,18 @@ impl Scanner {
     }
 
     pub fn scan(&mut self) -> Vec<AgentStatus> {
-        let procs = platform::find_cli_processes(&self.strategies);
+        let (procs, ppid_map) = platform::find_cli_processes(&self.strategies);
 
-        // Filter out subprocess agents: if a matched process's parent is also a
-        // matched CLI process, it's a subagent or tool child — not a user-level
-        // session. Build the set of all matched PIDs first so transitive
-        // descendants are also caught (child-of-child shares the same set).
+        // Filter out subprocess agents: if ANY ancestor of a matched process
+        // is also a matched CLI process, it's a subagent — not a user-level
+        // session. We walk the full ancestor chain via ppid_map to catch
+        // subagents spawned through intermediate processes (e.g.,
+        // claude → bash → claude subagent).
         let matched_pids: std::collections::HashSet<u32> =
             procs.iter().map(|(p, _)| p.pid).collect();
         let procs: Vec<_> = procs
             .into_iter()
-            .filter(|(p, _)| !matched_pids.contains(&p.ppid))
+            .filter(|(p, _)| !has_matched_ancestor(p.ppid, &matched_pids, &ppid_map))
             .collect();
 
         let mut agents: Vec<AgentStatus> = Vec::new();
@@ -216,6 +217,7 @@ impl Scanner {
 
         self.prev.retain(|pid, _| seen.contains(pid));
         self.session_id_cache.retain(|pid, _| seen.contains(pid));
+        self.window_cache.retain(|pid, _| seen.contains(pid));
         agents
     }
 
@@ -318,6 +320,30 @@ fn count_children(pid: u32, _excluded: &[&str]) -> u32 {
         .unwrap_or(0)
 }
 
+/// Walk up the process ancestor chain via ppid_map. Returns true if any
+/// ancestor PID is in the `matched` set (i.e., the process is a descendant
+/// of another matched CLI process — a subagent, not a user session).
+fn has_matched_ancestor(
+    ppid: u32,
+    matched: &std::collections::HashSet<u32>,
+    ppid_map: &HashMap<u32, u32>,
+) -> bool {
+    let mut cur = ppid;
+    for _ in 0..15 {
+        if cur <= 1 {
+            return false;
+        }
+        if matched.contains(&cur) {
+            return true;
+        }
+        cur = match ppid_map.get(&cur) {
+            Some(&p) => p,
+            None => return false,
+        };
+    }
+    false
+}
+
 /// Returns the kernel clock ticks per second (CLK_TCK).
 /// Reads from /proc on Linux; defaults to 100 on other platforms.
 fn clk_tck() -> u64 {
@@ -396,6 +422,38 @@ mod tests {
     fn scanner_returns_vec() {
         let mut s = Scanner::new();
         let _agents = s.scan();
+    }
+
+    #[test]
+    fn ancestor_direct_parent_matched() {
+        // claude(100) → claude(200): ppid=100 is matched → filtered
+        let matched: std::collections::HashSet<u32> = [100, 200].into();
+        let ppid_map: HashMap<u32, u32> = [(200, 100)].into();
+        assert!(has_matched_ancestor(100, &matched, &ppid_map));
+    }
+
+    #[test]
+    fn ancestor_through_intermediate() {
+        // claude(100) → bash(150) → claude(200): walk 200→150→100, 100 matched
+        let matched: std::collections::HashSet<u32> = [100, 200].into();
+        let ppid_map: HashMap<u32, u32> = [(200, 150), (150, 100), (100, 1)].into();
+        assert!(has_matched_ancestor(150, &matched, &ppid_map));
+    }
+
+    #[test]
+    fn ancestor_no_match() {
+        // terminal(50) → bash(150) → claude(200): no matched ancestor
+        let matched: std::collections::HashSet<u32> = [200].into();
+        let ppid_map: HashMap<u32, u32> = [(200, 150), (150, 50), (50, 1)].into();
+        assert!(!has_matched_ancestor(150, &matched, &ppid_map));
+    }
+
+    #[test]
+    fn ancestor_stops_at_init() {
+        // Process with ppid=1 (init) — no ancestor match
+        let matched: std::collections::HashSet<u32> = [100].into();
+        let ppid_map: HashMap<u32, u32> = [(100, 1)].into();
+        assert!(!has_matched_ancestor(1, &matched, &ppid_map));
     }
 
     #[test]

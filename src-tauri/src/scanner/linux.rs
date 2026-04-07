@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::watcher::TerminalInfo;
@@ -5,14 +6,16 @@ use super::{known_terminal, ProcInfo, WindowCache};
 use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
 
 /// Find CLI processes matching any registered strategy.
-/// Returns each process paired with a reference to the strategy that matched it.
+/// Returns each process paired with a reference to the strategy that matched it,
+/// plus a pid→ppid map for ALL processes (used for transitive ancestor filtering).
 pub fn find_cli_processes<'a>(
     strategies: &'a [Box<dyn CliStrategy>],
-) -> Vec<(ProcInfo, &'a dyn CliStrategy)> {
+) -> (Vec<(ProcInfo, &'a dyn CliStrategy)>, HashMap<u32, u32>) {
     let mut out = Vec::new();
+    let mut ppid_map = HashMap::new();
     let proc_dir = match std::fs::read_dir("/proc") {
         Ok(d) => d,
-        Err(_) => return out,
+        Err(_) => return (out, ppid_map),
     };
 
     for entry in proc_dir.flatten() {
@@ -24,6 +27,19 @@ pub fn find_cli_processes<'a>(
         };
 
         let base = PathBuf::from("/proc").join(&*name_str);
+
+        // Read ppid for ALL processes (lightweight, for transitive ancestor walk).
+        // Parse stat early; matched processes reuse the parsed fields below.
+        let stat_str = std::fs::read_to_string(base.join("stat")).ok();
+        if let Some(ref stat) = stat_str {
+            if let Some(close) = stat.rfind(')') {
+                if let Some(ppid) = stat[close + 2..].split_whitespace().nth(1)
+                    .and_then(|s| s.parse::<u32>().ok())
+                {
+                    ppid_map.insert(pid, ppid);
+                }
+            }
+        }
 
         let cmdline = match std::fs::read(&base.join("cmdline")) {
             Ok(bytes) if !bytes.is_empty() => bytes,
@@ -78,9 +94,10 @@ pub fn find_cli_processes<'a>(
             continue;
         }
 
-        let stat = match std::fs::read_to_string(base.join("stat")) {
-            Ok(s) => s,
-            Err(_) => continue,
+        // Reuse stat already read for ppid_map above
+        let stat = match stat_str {
+            Some(ref s) => s,
+            None => continue,
         };
         let close = match stat.rfind(')') {
             Some(i) => i,
@@ -126,7 +143,7 @@ pub fn find_cli_processes<'a>(
         }, strategy));
     }
 
-    out
+    (out, ppid_map)
 }
 
 pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalInfo> {

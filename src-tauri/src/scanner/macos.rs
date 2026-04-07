@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::watcher::TerminalInfo;
@@ -5,24 +6,32 @@ use super::{known_terminal, ProcInfo, WindowCache};
 use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
 
 /// Find CLI processes matching any registered strategy.
+/// Also returns a pid→ppid map for ALL processes (used for transitive
+/// ancestor filtering of subagent processes).
 pub fn find_cli_processes<'a>(
     strategies: &'a [Box<dyn CliStrategy>],
-) -> Vec<(ProcInfo, &'a dyn CliStrategy)> {
+) -> (Vec<(ProcInfo, &'a dyn CliStrategy)>, HashMap<u32, u32>) {
     let output = match std::process::Command::new("ps")
         .args(["-eo", "pid,ppid,pcpu,tty,command"])
         .output()
     {
         Ok(o) => o,
-        Err(_) => return Vec::new(),
+        Err(_) => return (Vec::new(), HashMap::new()),
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut out = Vec::new();
+    let mut ppid_map = HashMap::new();
 
     for line in stdout.lines().skip(1) {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 5 {
             continue;
+        }
+
+        // Build ppid map for ALL processes (used for transitive ancestor walk)
+        if let (Ok(pid), Ok(ppid)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
+            ppid_map.insert(pid, ppid);
         }
 
         let cmd_path = parts[4];
@@ -101,7 +110,7 @@ pub fn find_cli_processes<'a>(
         }, strategy));
     }
 
-    out
+    (out, ppid_map)
 }
 
 pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalInfo> {

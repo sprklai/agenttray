@@ -56,9 +56,17 @@ _write_status() {
   mv -f "$FILE.tmp" "$FILE"
 }
 
-# Cleanup: remove status file so dead agents don't linger
+CHILD_PID=""
+FIFO=""
+
+# Cleanup: kill child and remove status file so dead agents don't linger
 _cleanup() {
+  if [ -n "$CHILD_PID" ] && kill -0 "$CHILD_PID" 2>/dev/null; then
+    kill "$CHILD_PID" 2>/dev/null
+    wait "$CHILD_PID" 2>/dev/null
+  fi
   rm -f "$FILE" "$FILE.tmp"
+  [ -n "$FIFO" ] && rm -f "$FIFO"
   exit 130
 }
 trap _cleanup SIGTERM SIGINT SIGHUP
@@ -66,17 +74,27 @@ trap _cleanup SIGTERM SIGINT SIGHUP
 # Write starting status
 _write_status "starting" ""
 
-# Run the command, capturing stdout+stderr
-"$@" 2>&1 | while IFS= read -r line; do
+# Use a FIFO so the command runs in background (killable) while we read its output
+FIFO=$(mktemp -u "${TMPDIR:-/tmp}/agenttray.XXXXXX")
+mkfifo "$FIFO"
+
+"$@" > "$FIFO" 2>&1 &
+CHILD_PID=$!
+
+# Read output line by line
+while IFS= read -r line; do
   if printf '%s' "$line" | grep -qE "$INPUT_PAT"; then
     _write_status "needs-input" "$line"
   else
     _write_status "working" "$line"
   fi
-done
+done < "$FIFO"
 
-# Check exit code of the piped command
-EXIT_CODE=${PIPESTATUS[0]}
+# Wait for the child and capture its exit code
+wait "$CHILD_PID" 2>/dev/null
+EXIT_CODE=$?
+rm -f "$FIFO"
+
 if [ "$EXIT_CODE" -eq 0 ]; then
   # Clean exit — remove status file so agent doesn't linger
   rm -f "$FILE" "$FILE.tmp"

@@ -112,7 +112,7 @@ fn platform_beep() -> Result<(), String> {
     if Command::new("canberra-gtk-play")
         .args(["--id", "bell"])
         .output()
-        .is_ok()
+        .map_or(false, |o| o.status.success())
     {
         return Ok(());
     }
@@ -122,7 +122,7 @@ fn platform_beep() -> Result<(), String> {
         .args(["--property", "media.role=event"])
         .arg("/usr/share/sounds/freedesktop/stereo/bell.oga")
         .output()
-        .is_ok()
+        .map_or(false, |o| o.status.success())
     {
         return Ok(());
     }

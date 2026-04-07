@@ -13,6 +13,7 @@ pub fn focus(focus_id: &str, outer_id: &str) -> Result<(), String> {
 
         // If we have a TTY, try tab-specific focus via terminal's AppleScript API
         if !outer_id.is_empty() {
+            let safe_outer = outer_id.replace('\\', "\\\\").replace('"', "\\\"");
             let script = match focus_id {
                 "iTerm2" => Some(format!(
                     r#"tell application "iTerm2"
@@ -28,7 +29,7 @@ pub fn focus(focus_id: &str, outer_id: &str) -> Result<(), String> {
                             end repeat
                         end repeat
                     end tell"#,
-                    outer_id
+                    safe_outer
                 )),
                 "Terminal" => Some(format!(
                     r#"tell application "Terminal"
@@ -43,7 +44,7 @@ pub fn focus(focus_id: &str, outer_id: &str) -> Result<(), String> {
                             end repeat
                         end repeat
                     end tell"#,
-                    outer_id
+                    safe_outer
                 )),
                 _ => None,
             };

@@ -69,7 +69,7 @@ pub fn update_icon(app: &AppHandle, agents: &[AgentStatus]) {
 }
 
 pub fn pin_popup(app: &AppHandle) {
-    PINNED.store(true, Ordering::Relaxed);
+    PINNED.store(true, Ordering::SeqCst);
     let _ = app.emit("pinned-changed", true);
 
     // Show popup if not already visible
@@ -89,7 +89,7 @@ pub fn pin_popup(app: &AppHandle) {
 pub fn toggle_popup(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("popup") {
         if win.is_visible().unwrap_or(false) {
-            PINNED.store(false, Ordering::Relaxed);
+            PINNED.store(false, Ordering::SeqCst);
             let _ = app.emit("pinned-changed", false);
             let _ = app.save_window_state(StateFlags::POSITION);
             let _ = win.hide();
@@ -149,17 +149,17 @@ fn emit_current_state(app: &AppHandle) {
 
 #[tauri::command]
 pub fn toggle_pin(app: AppHandle) {
-    if PINNED.load(Ordering::Relaxed) {
-        PINNED.store(false, Ordering::Relaxed);
+    if PINNED.load(Ordering::SeqCst) {
+        PINNED.store(false, Ordering::SeqCst);
         let _ = app.emit("pinned-changed", false);
     } else {
-        PINNED.store(true, Ordering::Relaxed);
+        PINNED.store(true, Ordering::SeqCst);
         let _ = app.emit("pinned-changed", true);
     }
 }
 
 pub fn hide_popup(app: &AppHandle) {
-    PINNED.store(false, Ordering::Relaxed);
+    PINNED.store(false, Ordering::SeqCst);
     let _ = app.emit("pinned-changed", false);
     if let Some(win) = app.get_webview_window("popup") {
         let _ = app.save_window_state(StateFlags::POSITION);

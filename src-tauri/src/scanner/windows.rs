@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::watcher::TerminalInfo;
@@ -7,7 +8,7 @@ use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
 /// Find CLI processes matching any registered strategy.
 pub fn find_cli_processes<'a>(
     strategies: &'a [Box<dyn CliStrategy>],
-) -> Vec<(ProcInfo, &'a dyn CliStrategy)> {
+) -> (Vec<(ProcInfo, &'a dyn CliStrategy)>, HashMap<u32, u32>) {
     // Build wmic filter for all strategy process names + script runtimes
     let all_names: Vec<&str> = strategies.iter()
         .flat_map(|s| s.process_names().iter().copied())
@@ -35,11 +36,12 @@ pub fn find_cli_processes<'a>(
         .output()
     {
         Ok(o) => o,
-        Err(_) => return Vec::new(),
+        Err(_) => return (Vec::new(), HashMap::new()),
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut out = Vec::new();
+    let mut ppid_map = HashMap::new();
 
     for line in stdout.lines().skip(1) {
         let cols: Vec<&str> = line.split(',').collect();
@@ -90,6 +92,7 @@ pub fn find_cli_processes<'a>(
             Err(_) => continue,
         };
         let ppid: u32 = cols[3].trim().parse().unwrap_or(0);
+        ppid_map.insert(pid, ppid);
 
         // CWD is hard to get on Windows without elevated privileges
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("C:\\"));
@@ -110,7 +113,7 @@ pub fn find_cli_processes<'a>(
         }, strategy));
     }
 
-    out
+    (out, ppid_map)
 }
 
 pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalInfo> {
