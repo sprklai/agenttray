@@ -302,7 +302,8 @@ fn count_children(pid: u32, excluded: &[&str]) -> u32 {
         Err(_) => return 0,
     };
 
-    let child_pids: Vec<&str> = String::from_utf8_lossy(&output.stdout)
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let child_pids: Vec<&str> = stdout
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
