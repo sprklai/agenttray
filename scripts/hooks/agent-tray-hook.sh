@@ -107,6 +107,9 @@ SESSION_ID=$(get_session_id)
 SESSION_SHORT="${SESSION_ID:0:8}"
 STATUS_FILE="${MONITOR_DIR}/${CLI}-${SESSION_SHORT}.status"
 
+# Working directory for display name (may be absent in some CLI versions)
+CWD=$(json_field "$INPUT" "cwd" 2>/dev/null || echo "")
+
 # ── Terminal Info ──────────────────────────────────────────────
 
 build_terminal_json() {
@@ -277,11 +280,12 @@ write_status() {
 
   # Truncate message
   message="${message:0:500}"
-  local safe_msg
+  local safe_msg safe_cwd
   safe_msg=$(json_str "$message")
+  safe_cwd=$(json_str "$CWD")
 
   cat > "${STATUS_FILE}.tmp" <<EOJSON
-{"v":1,"status":"${status}","message":${safe_msg},"source":"hook","cli":"${CLI}","session_id":"${SESSION_ID}","hook_event":"${hook_event}","hook_matcher":"${hook_matcher}","terminal":${TERMINAL_JSON}}
+{"v":1,"status":"${status}","message":${safe_msg},"cwd":${safe_cwd},"source":"hook","cli":"${CLI}","session_id":"${SESSION_ID}","hook_event":"${hook_event}","hook_matcher":"${hook_matcher}","terminal":${TERMINAL_JSON}}
 EOJSON
   mv -f "${STATUS_FILE}.tmp" "${STATUS_FILE}"
 }

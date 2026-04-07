@@ -113,10 +113,24 @@ pub fn parse_status_file(path: &Path) -> Option<AgentStatus> {
         let hook_event = val.get("hook_event").and_then(|s| s.as_str()).map(String::from);
         let hook_matcher = val.get("hook_matcher").and_then(|s| s.as_str()).map(String::from);
 
+        // Derive a human-readable display name from cwd basename + terminal label,
+        // mirroring the "Project · Terminal" pattern used by scanned agents.
+        let cwd_project = val.get("cwd")
+            .and_then(|c| c.as_str())
+            .filter(|s| !s.is_empty())
+            .and_then(|cwd| std::path::Path::new(cwd).file_name())
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string());
+        let display_name = match (cwd_project, terminal.as_ref()) {
+            (Some(proj), Some(t)) if !t.label.is_empty() => format!("{} · {}", proj, t.label),
+            (Some(proj), _) => proj,
+            _ => name.clone(),
+        };
+
         let id = format!("file:{}", name);
         Some(AgentStatus {
             id,
-            name,
+            name: display_name,
             status,
             message,
             terminal,
