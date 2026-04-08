@@ -31,6 +31,7 @@ Supports **Claude Code**, **Codex CLI**, and **Gemini CLI** out of the box — v
 ## Features
 
 - **Live status monitoring** — colored tray icon reflects the most urgent agent state
+- **Audio + desktop alerts** — plays a system beep and sends a native desktop notification the moment an agent needs input
 - **Popup dashboard** — click the tray icon to see all agents with status, message, and focus button
 - **Terminal focus** — jump directly to the terminal running a specific agent
 - **Native hook integration** — installs lightweight hooks into Claude Code, Codex CLI, and Gemini CLI for instant status updates
@@ -44,7 +45,7 @@ Supports **Claude Code**, **Codex CLI**, and **Gemini CLI** out of the box — v
 
 | State        | Color  | Meaning                        |
 |--------------|--------|--------------------------------|
-| needs-input  | Yellow | Agent is waiting for user input |
+| needs-input  | Yellow | Agent is waiting for user input — triggers beep + desktop notification |
 | error        | Red    | Agent exited with non-zero code |
 | working      | Blue   | Agent is actively processing    |
 | starting     | Cyan   | Agent just launched             |
@@ -64,6 +65,7 @@ CLI hook fires → agent-tray-hook.sh maps event to status
   → emits "agents-updated" Tauri event
   → Svelte popup re-renders agent list
   → tray icon color updates to match aggregate state
+  → if needs-input transition: plays system beep + sends desktop notification
 ```
 
 Hooks are installed into each CLI's settings file and fire on events like session start, tool use, notifications, and stop. The hook script auto-detects which CLI is calling it and maps events to the appropriate status.
