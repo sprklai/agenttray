@@ -3,6 +3,7 @@
 Desktop tray app that alerts you when Claude Code, Codex CLI, or Gemini CLI pauses for input.
 
 [![GitHub Release](https://img.shields.io/github/v/release/sprklai/agenttray?style=flat-square&label=latest)](https://github.com/sprklai/agenttray/releases/latest)
+[![GitHub Downloads](https://img.shields.io/github/downloads/sprklai/agenttray/total?style=flat-square)](https://github.com/sprklai/agenttray/releases)
 [![License](https://img.shields.io/github/license/sprklai/agenttray?style=flat-square)](LICENSE)
 [![Built with Tauri](https://img.shields.io/badge/built_with-Tauri_2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
 
