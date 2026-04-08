@@ -1,24 +1,62 @@
 # Scripts
 
-## build.sh
+These scripts are how hook setup, custom CLI support, and local builds work today.
 
-Build automation for dev and release modes.
+## Common Tasks
+
+### Install Hooks for Supported CLIs
+
+Unix:
 
 ```bash
-./scripts/build.sh --dev                           # Dev mode
-./scripts/build.sh --release                       # Release build
-./scripts/build.sh --release --bundle deb,appimage # With specific bundles
+./scripts/hooks/install-hooks.sh all
+./scripts/hooks/install-hooks.sh claude
+./scripts/hooks/install-hooks.sh codex
+./scripts/hooks/install-hooks.sh gemini
+./scripts/hooks/install-hooks.sh all --uninstall
 ```
 
-## wrap.sh
+Windows:
 
-Wraps any command-line agent to report real-time status via JSON files.
+```powershell
+.\scripts\hooks\install-hooks.ps1 -Target all
+.\scripts\hooks\install-hooks.ps1 -Target claude
+.\scripts\hooks\install-hooks.ps1 -Target codex
+.\scripts\hooks\install-hooks.ps1 -Target gemini
+.\scripts\hooks\install-hooks.ps1 -Target all -Uninstall
+```
+
+Notes:
+
+- Unix hook installation requires `jq`
+- Installers merge AgentTray entries into CLI settings instead of overwriting them
+- AgentTray entries are tagged as `"agent-tray"` so uninstall removes only its own hooks
+
+Settings files modified:
+
+| CLI | File |
+| --- | --- |
+| Claude Code | `~/.claude/settings.json` |
+| Codex CLI | `~/.codex/hooks.json` |
+| Gemini CLI | `~/.gemini/settings.json` |
+
+### Wrap Unsupported CLIs
+
+Unix:
 
 ```bash
 ./scripts/wrap.sh my-agent -- claude chat
 ```
 
-Creates `~/.agent-monitor/my-agent.status` with atomic JSON updates:
+Windows:
+
+```powershell
+.\scripts\wrap.ps1 my-agent -- claude chat
+```
+
+This creates `~/.agent-monitor/my-agent.status` with atomic JSON updates that AgentTray can watch.
+
+Example payload:
 
 ```json
 {
@@ -34,91 +72,41 @@ Creates `~/.agent-monitor/my-agent.status` with atomic JSON updates:
 }
 ```
 
-## release.sh
-
-Syncs version across `src-tauri/Cargo.toml`, `package.json`, and `src-tauri/tauri.conf.json`, then commits and creates a git tag to trigger the GitHub Actions release workflow.
+### Build Locally
 
 ```bash
-./scripts/release.sh 0.2.0              # Bump, commit, tag (manual push)
-./scripts/release.sh --push 0.2.0      # Full release: bump, commit, tag, push
-./scripts/release.sh --dry-run 0.2.0   # Preview changes without applying
+./scripts/build.sh --dev
+./scripts/build.sh --release
+./scripts/build.sh --release --bundle deb,appimage
 ```
 
-### Pre-flight checks
+PowerShell:
 
-- Must be on `main` branch
-- Working tree must be clean (no uncommitted changes)
-- Tag must not already exist
-
-### Required GitHub Secrets
-
-macOS signing requires these repository secrets (shared with the NSR Tech org):
-
-| Secret | Purpose |
-|--------|---------|
-| `APPLE_CERTIFICATE` | Base64-encoded .p12 Developer ID certificate |
-| `APPLE_CERTIFICATE_PASSWORD` | Password for the .p12 file |
-| `KEYCHAIN_PASSWORD` | CI keychain password (any value) |
-| `APPLE_SIGNING_IDENTITY` | Signing identity string |
-| `APPLE_ID` | Apple ID email for notarization |
-| `APPLE_PASSWORD` | App-specific password for notarization |
-
-`GITHUB_TOKEN` is provided automatically by GitHub Actions.
-
-### Manual Dispatch
-
-You can also trigger builds from the [Actions tab](https://github.com/sprklai/agenttray/actions/workflows/release.yml) with inputs for platform selection, version override, and publish toggle.
-
-## hooks/
-
-### install-hooks.sh
-
-Installs/uninstalls AgentTray hook entries into AI CLI settings files. Uses `jq` to safely merge entries without overwriting existing settings.
-
-```bash
-./scripts/hooks/install-hooks.sh all              # Install for all CLIs
-./scripts/hooks/install-hooks.sh claude            # Claude Code only
-./scripts/hooks/install-hooks.sh codex             # Codex CLI only
-./scripts/hooks/install-hooks.sh gemini            # Gemini CLI only
-./scripts/hooks/install-hooks.sh all --uninstall   # Remove all hooks
+```powershell
+.\scripts\build.ps1 -Dev
+.\scripts\build.ps1 -Release
 ```
 
-All hook entries are tagged with `"agent-tray"` — the installer removes existing tagged entries before adding new ones (safe to re-run). The `--uninstall` flag removes only AgentTray entries.
+## Script Reference
 
-**Settings files modified:**
+### `scripts/hooks/agent-tray-hook.sh` and `scripts/hooks/agent-tray-hook.ps1`
 
-| CLI          | File                          |
-|--------------|-------------------------------|
-| Claude Code  | `~/.claude/settings.json`     |
-| Codex CLI    | `~/.codex/hooks.json`         |
-| Gemini CLI   | `~/.gemini/settings.json`     |
+Universal hook bridges for supported CLIs. They read hook event JSON, map it to AgentTray states, and write status files into `~/.agent-monitor/`.
 
-### agent-tray-hook.sh
+### `scripts/registry.sh`
 
-Universal hook bridge called by all supported CLIs. Reads hook event JSON from stdin, auto-detects which CLI is calling it, maps events to AgentTray status, and writes atomic status files to `~/.agent-monitor/`.
+Terminal detector registry. It sources scripts from `scripts/detectors/` and returns the first matching terminal descriptor as JSON.
 
-**Supported events by CLI:**
+### `scripts/detectors/`
 
-| Claude Code       | Codex CLI         | Gemini CLI        |
-|-------------------|-------------------|-------------------|
-| SessionStart      | SessionStart      | SessionStart      |
-| Notification      | PreToolUse        | SessionEnd        |
-| Stop              | PostToolUse       | BeforeAgent       |
-| PreToolUse        | Stop              | AfterAgent        |
-| SubagentStop      | UserPromptSubmit  | BeforeTool/AfterTool |
-|                   |                   | Notification      |
-|                   |                   | PreCompress       |
+Add a terminal detector as `NN_name.sh`. Each detector should print JSON with `kind`, `focus_id`, and `label` when it matches, or print nothing otherwise.
 
-## registry.sh
+Adding a new terminal type usually means:
 
-Terminal detector registry. Sources detector scripts from `detectors/` and returns the first matching terminal info as JSON.
+1. Add a detector in `scripts/detectors/`
+2. Add a Rust focuser in `src-tauri/src/focusers/`
+3. Register the new focuser in `src-tauri/src/focusers/mod.rs`
 
-## detectors/
+## Maintainer Docs
 
-Add terminal detection scripts here as `NN_name.sh`. Each script should print JSON with `kind`, `focus_id`, and `label` fields if it detects a matching terminal, or print nothing otherwise.
-
-### Adding a New Terminal Type
-
-1. **Detector** — add `scripts/detectors/NN_name.sh`
-2. **Focuser** — add `src-tauri/src/focusers/name.rs` implementing the focus logic
-3. **Register** — add one line to `src-tauri/src/focusers/mod.rs` dispatch match
+- Release process: [../docs/maintainers/releasing.md](../docs/maintainers/releasing.md)

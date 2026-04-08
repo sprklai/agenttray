@@ -10,12 +10,15 @@
 
 **Do not open a public issue for security vulnerabilities.**
 
-Instead, please email **aisprkl@gmail.com** with:
+Please email **aisprkl@gmail.com** with:
 
 1. A description of the vulnerability
-2. Steps to reproduce
-3. Potential impact assessment
-4. Any suggested fixes (optional)
+2. Affected version or commit
+3. Steps to reproduce
+4. Potential impact assessment
+5. Any suggested fixes (optional)
+
+This email address is the current reporting channel for the project.
 
 ## Response Timeline
 

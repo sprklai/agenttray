@@ -1,232 +1,141 @@
 # AgentTray
 
-### Know the moment your AI needs you.
-
-Real-time tray notifications for Claude, Codex, and Gemini — surfaces agent pauses that need your input, instantly.
+Desktop tray app that alerts you when Claude Code, Codex CLI, or Gemini CLI pauses for input.
 
 [![GitHub Release](https://img.shields.io/github/v/release/sprklai/agenttray?style=flat-square&label=latest)](https://github.com/sprklai/agenttray/releases/latest)
 [![License](https://img.shields.io/github/license/sprklai/agenttray?style=flat-square)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue?style=flat-square)](#download)
 [![Built with Tauri](https://img.shields.io/badge/built_with-Tauri_2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
-[![Stars](https://img.shields.io/github/stars/sprklai/agenttray?style=flat-square)](https://github.com/sprklai/agenttray/stargazers)
 
-<img src="assets/AdobeAgentTray.gif" alt="AgentTray — real-time AI agent monitor" width="800" />
+I built AgentTray because I kept missing prompts from long-running agent sessions in another terminal. It sits in the tray, changes color when a session needs input, and opens a small popup with the sessions it can see. If your terminal exposes enough focus metadata, the popup can jump back to it.
 
-**Live agent status. Input alerts. Zero tab-switching.**
+- Hook-based prompt alerts for Claude Code, Codex CLI, and Gemini CLI
+- Process scanning when hooks are not installed
+- Native desktop notifications plus a tray status dot
+- No daemon and no hosted backend; status files live in `~/.agent-monitor/`
 
-## Download
+<p align="center">
+  <img src="assets/agenttray-demo.gif" alt="AgentTray demo" width="860" />
+</p>
+<p align="center">
+  <img src="assets/agenttray-screenshot.png" alt="AgentTray screenshot" width="860" />
+</p>
 
-[![Linux](https://img.shields.io/badge/Linux-.deb%20%7C%20.AppImage%20%7C%20.rpm-orange?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/sprklai/agenttray/releases/latest)
-[![macOS](https://img.shields.io/badge/macOS-.dmg%20(arm64%20%2B%20x64)-black?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/sprklai/agenttray/releases/latest)
-[![Windows](https://img.shields.io/badge/Windows-.msi%20%7C%20.exe-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/sprklai/agenttray/releases/latest)
+## Why It Exists
 
-> Pick the right format for your distro/arch from the [releases page](https://github.com/sprklai/agenttray/releases/latest).
+The problem is not whether AI CLIs can notify you at all. The problem is that long agent sessions disappear behind other work. Notifications stack up, get dismissed, or arrive when you are deep in another window.
 
----
+What I wanted was something quieter than another popup and easier to trust at a glance than a stack of notifications.
 
-A system tray app that monitors AI coding agents in real-time and displays their status at a glance. Built with Tauri 2, SvelteKit, and Rust.
+## What It Does
 
-Supports **Claude Code**, **Codex CLI**, and **Gemini CLI** out of the box — via native hooks or process scanning.
+- `needs-input` / yellow: the agent is waiting on you
+- `error` / red: the session failed
+- `working` / blue: the agent is actively doing work
+- `idle` / green: the agent is still running but mostly quiet
+- `offline` / gray: nothing is currently detected
 
-## Features
+Hooks give AgentTray better state changes. Without hooks, it falls back to process scanning so you can still see active sessions.
 
-- **Live status monitoring** — colored tray icon reflects the most urgent agent state
-- **Audio + desktop alerts** — plays a system beep and sends a native desktop notification the moment an agent needs input
-- **Popup dashboard** — click the tray icon to see all agents with status, message, and focus button
-- **Terminal focus** — jump directly to the terminal running a specific agent
-- **Native hook integration** — installs lightweight hooks into Claude Code, Codex CLI, and Gemini CLI for instant status updates
-- **Process scanning** — automatically detects running CLI instances (Linux, macOS, Windows) as a fallback
-- **Source-aware dedup** — merges hook-reported and process-scanned agents without duplicates
-- **File-based status** — agents report status via simple JSON files in `~/.agent-monitor/`
-- **Global hotkey** — `Ctrl+Shift+A` toggles the popup from anywhere
-- **Lightweight** — no background services, no database, just file watchers and hooks
+## Quick Start
 
-## Status States
+The most reliable setup today is from source because the hook installers currently live in this repo.
 
-| State        | Color                | Meaning                        |
-|--------------|----------------------|--------------------------------|
-| needs-input  | 🟡 Yellow            | Agent is waiting for user input — triggers beep + desktop notification |
-| error        | 🔴 Red               | Agent exited with non-zero code |
-| working      | 🔵 Blue              | Agent is actively processing    |
-| starting     | 🔵 Cyan              | Agent just launched             |
-| idle         | 🟢 Green             | Agent running, minimal CPU      |
-| offline      | ⚪ Gray              | No status file found            |
+### Full Setup With Hooks
 
-## How It Works
-
-AgentTray uses two complementary strategies to track agents:
-
-### 1. Hooks (recommended)
-
-```
-CLI hook fires → agent-tray-hook.sh maps event to status
-  → writes ~/.agent-monitor/<cli>-<session>.status (JSON)
-  → watcher.rs detects file change (inotify)
-  → emits "agents-updated" Tauri event
-  → Svelte popup re-renders agent list
-  → tray icon color updates to match aggregate state
-  → if needs-input transition: plays system beep + sends desktop notification
+```bash
+git clone https://github.com/sprklai/agenttray.git
+cd agenttray
+bun install
+./scripts/hooks/install-hooks.sh all
+cargo tauri dev
 ```
 
-Hooks are installed into each CLI's settings file and fire on events like session start, tool use, notifications, and stop. The hook script auto-detects which CLI is calling it and maps events to the appropriate status.
+Requirements:
 
-### 2. Process scanning (fallback)
-
-```
-scanner/ detects running CLI processes (Linux /proc, macOS, Windows)
-  → merges with hook-reported agents (dedup by session)
-  → emits "agents-updated" Tauri event
-```
-
-Process scanning works without any setup but provides less granular status (just running/not running). Hook-sourced agents take priority when both sources report the same session.
-
-## Prerequisites
-
-- [Rust](https://rustup.rs/) (stable)
+- [Rust](https://rustup.rs/) stable
 - [Bun](https://bun.sh/)
 - Tauri CLI: `cargo install tauri-cli`
-- Linux system dependencies (Ubuntu/Debian):
+- `jq` for `install-hooks.sh`
+- Ubuntu/Debian system packages:
   ```bash
   sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
   ```
 
-## Getting Started
+### Prebuilt App Only
 
-```bash
-# Clone
-git clone https://github.com/sprklai/agenttray.git
-cd agenttray
+If you only want scan-based detection, download a build from the [releases page](https://github.com/sprklai/agenttray/releases/latest) and run it.
 
-# Install frontend dependencies
-bun install
+Hook installation is still script-based:
 
-# Run in dev mode
-cargo tauri dev
-```
+- Unix: `./scripts/hooks/install-hooks.sh all`
+- Windows: `.\scripts\hooks\install-hooks.ps1 -Target all`
 
-## Installing Hooks
+## Compatibility
 
-The recommended way to connect AgentTray to your AI CLI tools:
+| Area | Current status |
+| --- | --- |
+| Supported CLIs | Claude Code, Codex CLI, Gemini CLI |
+| Hook-based updates | Supported for all three CLIs |
+| Scan-based detection | Supported for all three CLIs |
+| Linux | Used most during development |
+| macOS | Supported in code, less tested than Linux |
+| Windows | Supported in code, less tested than Linux |
+| Terminal focus | Works for supported terminals and multiplexers; otherwise monitoring still works without focus |
 
-```bash
-# Install hooks for all supported CLIs
-./scripts/hooks/install-hooks.sh all
+Detailed matrix: [docs/compatibility.md](docs/compatibility.md)
 
-# Or install for a specific CLI
-./scripts/hooks/install-hooks.sh claude
-./scripts/hooks/install-hooks.sh codex
-./scripts/hooks/install-hooks.sh gemini
+## Use Cases
 
-# Uninstall
-./scripts/hooks/install-hooks.sh all --uninstall
-```
+- Monitor a long Codex run while working in another window
+- See when Claude Code is waiting on permission or input
+- Keep multiple agent sessions visible across terminals
+- Wrap an unsupported CLI and still get file-based status updates
 
-Requires `jq` to be installed.
+Examples: [docs/use-cases.md](docs/use-cases.md)
 
-### What the installer does
+## FAQ
 
-The installer **merges** hook entries into each CLI's settings file — it does not overwrite existing settings. All entries are tagged with `"agent-tray"` for clean identification and removal.
+### Why not just rely on built-in notifications?
 
-| CLI          | Settings file modified                |
-|--------------|---------------------------------------|
-| Claude Code  | `~/.claude/settings.json`             |
-| Codex CLI    | `~/.codex/hooks.json`                 |
-| Gemini CLI   | `~/.gemini/settings.json`             |
+Because notifications disappear. The tray does not.
 
-> **Note:** Claude Code hooks must live in `~/.claude/settings.json` — there is no alternative location. The installer safely merges using `jq` and the `--uninstall` flag cleanly removes only AgentTray entries, leaving all other settings intact.
+### Does AgentTray send my prompts anywhere?
 
-### Alternative: wrap.sh
+No. AgentTray watches local status files in `~/.agent-monitor/` and local process metadata. There is no hosted service in the current setup.
 
-For agents that don't support hooks, or for custom commands:
+### Do I need hooks?
 
-```bash
-./scripts/wrap.sh my-agent -- claude chat
-```
+No. Hooks work better, but they are optional. Without them, AgentTray still detects running agent processes and basic state changes via scanning.
 
-Creates `~/.agent-monitor/my-agent.status` with real-time JSON status updates. See `scripts/README.md` for all script documentation.
+### What if my CLI is not supported?
 
-## Build Commands
+You can use the wrapper scripts documented in [scripts/README.md](scripts/README.md) to report file-based status for custom or unsupported commands.
 
-```bash
-bun install                  # Install frontend dependencies
-bun run dev                  # Start SvelteKit dev server only
-bun run build                # Build frontend to ./build/
-bun run check                # TypeScript/Svelte type checking
-cargo tauri dev              # Full app in dev mode
-cargo tauri build            # Production build
-```
+## Current Limitations
 
-## Project Structure
+- Linux is still the platform used most during development.
+- Hook installation is script-first today, not yet a polished in-app onboarding flow.
+- Terminal focus depends on the terminal or multiplexer exposing enough metadata to target the right session.
 
-```
-├── scripts/
-│   ├── build.sh              # Build automation
-│   ├── wrap.sh               # Agent command wrapper
-│   ├── registry.sh           # Terminal detector registry
-│   ├── detectors/            # Terminal detection scripts
-│   └── hooks/
-│       ├── install-hooks.sh  # Hook installer/uninstaller
-│       └── agent-tray-hook.sh # Universal hook bridge script
-├── src/
-│   ├── routes/+page.svelte   # Popup UI
-│   ├── lib/components/       # Svelte components (AgentRow, StatusDot, etc.)
-│   ├── lib/types.ts          # TypeScript interfaces
-│   └── lib/utils.ts          # Utility functions
-├── src-tauri/
-│   ├── src/main.rs           # App entry, tray setup, watcher spawn
-│   ├── src/watcher.rs        # File watcher, event loop, orphan cleanup
-│   ├── src/scanner/          # Cross-platform process scanner (Linux, macOS, Windows)
-│   ├── src/heuristics.rs     # CPU/state heuristics for status classification
-│   ├── src/notifier.rs       # Desktop notification dispatch
-│   ├── src/tray.rs           # Tray icon + popup window management
-│   ├── src/focus.rs          # Terminal focus command router
-│   ├── src/focusers/         # Platform-specific focus handlers
-│   ├── icons/                # App and tray icons
-│   └── Cargo.toml            # Rust dependencies
-├── CLAUDE.md                 # Claude Code project instructions
-└── package.json              # Frontend dependencies
-```
+## Docs
 
-## Tech Stack
-
-- **Backend:** Rust + Tauri 2.x (tray-icon, shell, process, global-shortcut, notification, window-state plugins)
-- **Frontend:** SvelteKit + Svelte 5 (runes) + Tailwind CSS v4
-- **File watching:** notify crate v8
-- **Icons:** Lucide Svelte
-
-## Releasing
-
-Releases are built automatically by [GitHub Actions](.github/workflows/release.yml) for all platforms:
-
-| Platform | Formats |
-|----------|---------|
-| Linux    | `.deb`, `.rpm`, `.AppImage` |
-| Windows  | `.msi`, `.exe` (NSIS) |
-| macOS    | `.dmg` (arm64 + x86_64) |
-
-See `scripts/README.md` for release script usage and required secrets.
+- [Compatibility matrix](docs/compatibility.md)
+- [Use cases](docs/use-cases.md)
+- [Script usage](scripts/README.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
 
 ## Contributing
 
-Contributions welcome — especially in two areas:
+If you want to help, the biggest gaps right now are:
 
-**Add CLI hook support** — Aider, Amp, Continue.dev, and other CLIs that have hook/event APIs. Adding a new CLI is ~30–50 lines of shell in `scripts/hooks/agent-tray-hook.sh`. See [#7](https://github.com/sprklai/agenttray/issues/7) and [#8](https://github.com/sprklai/agenttray/issues/8).
+- new CLI hook integrations
+- more terminal focusers
+- macOS and Windows validation
+- onboarding and docs polish
 
-**Add terminal focus support** — Ghostty, Wezterm, Zellij, Alacritty. Each focuser is a small Rust impl of one trait in `src-tauri/src/focusers/`. See [#12](https://github.com/sprklai/agenttray/issues/12).
-
-Browse all [`help wanted`](https://github.com/sprklai/agenttray/issues?q=is%3Aopen+label%3A%22help+wanted%22) and [`good first issue`](https://github.com/sprklai/agenttray/issues?q=is%3Aopen+label%3A%22good+first+issue%22) issues. Comment `/assign` on any issue to self-assign it. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and architecture details.
-
-## Star History
-
-<a href="https://star-history.com/#sprklai/agenttray&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=sprklai/agenttray&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=sprklai/agenttray&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=sprklai/agenttray&type=Date" />
-  </picture>
-</a>
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the open [`help wanted`](https://github.com/sprklai/agenttray/issues?q=is%3Aopen+label%3A%22help+wanted%22) or [`good first issue`](https://github.com/sprklai/agenttray/issues?q=is%3Aopen+label%3A%22good+first+issue%22) labels.
 
 ## License
 
 MIT
-
