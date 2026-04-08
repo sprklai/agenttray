@@ -8,6 +8,7 @@ Real-time tray notifications for Claude, Codex, and Gemini — surfaces agent pa
 [![License](https://img.shields.io/github/license/sprklai/agenttray?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue?style=flat-square)](#download)
 [![Built with Tauri](https://img.shields.io/badge/built_with-Tauri_2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
+[![Stars](https://img.shields.io/github/stars/sprklai/agenttray?style=flat-square)](https://github.com/sprklai/agenttray/stargazers)
 
 <img src="assets/AdobeAgentTray.gif" alt="AgentTray — real-time AI agent monitor" width="800" />
 
@@ -202,6 +203,10 @@ Releases are built automatically by [GitHub Actions](.github/workflows/release.y
 | macOS    | `.dmg` (arm64 + x86_64) |
 
 See `scripts/README.md` for release script usage and required secrets.
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=sprklai/agenttray&type=Date)](https://star-history.com/#sprklai/agenttray)
 
 ## License
 
