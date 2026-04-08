@@ -17,7 +17,7 @@ I built AgentTray because I kept missing prompts from long-running agent session
   <img src="assets/agenttray-demo.gif" alt="AgentTray demo" width="860" />
 </p>
 <p align="center">
-  <img src="assets/agenttray-screenshot.png" alt="AgentTray screenshot" width="860" />
+  <img src="assets/agenttray-screenshot.png" alt="AgentTray screenshot" width="400" />
 </p>
 
 ## Why It Exists
