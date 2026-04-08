@@ -28,11 +28,13 @@ What I wanted was something quieter than another popup and easier to trust at a 
 
 ## What It Does
 
-- `needs-input` / yellow: the agent is waiting on you
-- `error` / red: the session failed
-- `working` / blue: the agent is actively doing work
-- `idle` / green: the agent is still running but mostly quiet
-- `offline` / gray: nothing is currently detected
+| State        | Color                | Meaning                        |
+|--------------|----------------------|--------------------------------|
+| needs-input  | 🟡 Yellow            | Agent is waiting for user input — triggers beep + desktop notification |
+| error        | 🔴 Red               | Agent exited with non-zero code |
+| working      | 🔵 Blue              | Agent is actively processing    |
+| idle         | 🟢 Green             | Agent running, minimal CPU      |
+| offline      | ⚪ Gray              | No status file found            |
 
 Hooks give AgentTray better state changes. Without hooks, it falls back to process scanning so you can still see active sessions.
 
