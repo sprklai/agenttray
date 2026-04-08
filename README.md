@@ -9,7 +9,7 @@ Real-time tray notifications for Claude, Codex, and Gemini — surfaces agent pa
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue?style=flat-square)](#download)
 [![Built with Tauri](https://img.shields.io/badge/built_with-Tauri_2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
 
-![AgentTray — real-time AI agent monitor](assets/AdobeAgentTray.gif)
+<img src="assets/AdobeAgentTray.gif" alt="AgentTray — real-time AI agent monitor" width="800" />
 
 **Live agent status. Input alerts. Zero tab-switching.**
 
