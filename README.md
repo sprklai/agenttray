@@ -4,9 +4,26 @@
 
 Real-time tray notifications for Claude, Codex, and Gemini — surfaces agent pauses that need your input, instantly.
 
-**Live agent status. Input alerts. Zero tab-switching.**
+[![GitHub Release](https://img.shields.io/github/v/release/sprklai/agenttray?style=flat-square&label=latest)](https://github.com/sprklai/agenttray/releases/latest)
+[![License](https://img.shields.io/github/license/sprklai/agenttray?style=flat-square)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue?style=flat-square)](#download)
+[![Built with Tauri](https://img.shields.io/badge/built_with-Tauri_2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
 
 ![AgentTray — real-time AI agent monitor](assets/AdobeAgentTray.gif)
+
+**Live agent status. Input alerts. Zero tab-switching.**
+
+## Download
+
+| Platform | Format | Link |
+|----------|--------|------|
+| Linux | `.deb` (Debian/Ubuntu) | [Download](https://github.com/sprklai/agenttray/releases/latest) |
+| Linux | `.AppImage` (portable) | [Download](https://github.com/sprklai/agenttray/releases/latest) |
+| Linux | `.rpm` (Fedora/RHEL) | [Download](https://github.com/sprklai/agenttray/releases/latest) |
+| macOS | `.dmg` (Apple Silicon) | [Download](https://github.com/sprklai/agenttray/releases/latest) |
+| macOS | `.dmg` (Intel) | [Download](https://github.com/sprklai/agenttray/releases/latest) |
+| Windows | `.msi` installer | [Download](https://github.com/sprklai/agenttray/releases/latest) |
+| Windows | `.exe` (NSIS) | [Download](https://github.com/sprklai/agenttray/releases/latest) |
 
 ---
 
