@@ -43,14 +43,14 @@ Supports **Claude Code**, **Codex CLI**, and **Gemini CLI** out of the box — v
 
 ## Status States
 
-| State        | Color  | Meaning                        |
-|--------------|--------|--------------------------------|
-| needs-input  | Yellow | Agent is waiting for user input — triggers beep + desktop notification |
-| error        | Red    | Agent exited with non-zero code |
-| working      | Blue   | Agent is actively processing    |
-| starting     | Cyan   | Agent just launched             |
-| idle         | Green  | Agent running, minimal CPU      |
-| offline      | Gray   | No status file found            |
+| State        | Color                | Meaning                        |
+|--------------|----------------------|--------------------------------|
+| needs-input  | 🟡 Yellow            | Agent is waiting for user input — triggers beep + desktop notification |
+| error        | 🔴 Red               | Agent exited with non-zero code |
+| working      | 🔵 Blue              | Agent is actively processing    |
+| starting     | 🔵 Cyan              | Agent just launched             |
+| idle         | 🟢 Green             | Agent running, minimal CPU      |
+| offline      | ⚪ Gray              | No status file found            |
 
 ## How It Works
 
@@ -205,6 +205,16 @@ Releases are built automatically by [GitHub Actions](.github/workflows/release.y
 | macOS    | `.dmg` (arm64 + x86_64) |
 
 See `scripts/README.md` for release script usage and required secrets.
+
+## Contributing
+
+Contributions welcome — especially in two areas:
+
+**Add CLI hook support** — Aider, Amp, Continue.dev, and other CLIs that have hook/event APIs. Adding a new CLI is ~30–50 lines of shell in `scripts/hooks/agent-tray-hook.sh`. See [#7](https://github.com/sprklai/agenttray/issues/7) and [#8](https://github.com/sprklai/agenttray/issues/8).
+
+**Add terminal focus support** — Ghostty, Wezterm, Zellij, Alacritty. Each focuser is a small Rust impl of one trait in `src-tauri/src/focusers/`. See [#12](https://github.com/sprklai/agenttray/issues/12).
+
+Browse all [`help wanted`](https://github.com/sprklai/agenttray/issues?q=is%3Aopen+label%3A%22help+wanted%22) and [`good first issue`](https://github.com/sprklai/agenttray/issues?q=is%3Aopen+label%3A%22good+first+issue%22) issues. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and architecture details.
 
 ## Star History
 

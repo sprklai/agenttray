@@ -2,6 +2,35 @@
 
 Thank you for your interest in contributing to AgentTray! This guide will help you get started.
 
+## Where to Help
+
+Two areas have labeled issues ready for contributors:
+
+### 1. Add CLI hook support
+
+The hook bridge is a universal shell script (`scripts/hooks/agent-tray-hook.sh`) that Claude Code, Codex CLI, and Gemini CLI call on their events. Adding a new CLI takes ~30–50 lines:
+
+1. Add detection logic in `detect_cli()` — typically 2–3 env var checks
+2. Add an event→status mapping for that CLI's hook format (`working` / `needs-input` / `idle` / `error`)
+3. Add an `install_<cli>()` function that merges hook entries into that CLI's settings file
+
+See existing implementations for Claude Code and Codex as templates. Issues: [#7 Aider](https://github.com/sprklai/agenttray/issues/7), [#8 Amp](https://github.com/sprklai/agenttray/issues/8).
+
+### 2. Add terminal focus support
+
+The focus dispatcher lives in `src-tauri/src/focusers/` — one Rust impl per terminal kind. Each focuser receives a `FocusTarget` (terminal kind + session ID) and brings that window/pane to front.
+
+To add a new terminal:
+1. Create `src-tauri/src/focusers/<terminal>.rs` implementing the `Focuser` trait
+2. Add detection in `src-tauri/src/focus.rs` using env vars (`$TERM_PROGRAM`, `$KITTY_PID`, etc.)
+3. Wire it into the `dispatch()` match
+
+See `focusers/kitty.rs` or `focusers/tmux.rs` as templates. Issue: [#12 Ghostty](https://github.com/sprklai/agenttray/issues/12).
+
+All open `help wanted` and `good first issue` issues: [browse by label](https://github.com/sprklai/agenttray/issues?q=is%3Aopen+label%3A%22help+wanted%22%2C%22good+first+issue%22).
+
+---
+
 ## Getting Started
 
 1. **Fork** the repository on GitHub
