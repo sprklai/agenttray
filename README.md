@@ -1,5 +1,15 @@
 # AgentTray
 
+### Know the moment your AI needs you.
+
+Real-time tray notifications for Claude, Codex, and Gemini — surfaces agent pauses that need your input, instantly.
+
+**Live agent status. Input alerts. Zero tab-switching.**
+
+![AgentTray — real-time AI agent monitor](assets/AdobeAgentTray.gif)
+
+---
+
 A system tray app that monitors AI coding agents in real-time and displays their status at a glance. Built with Tauri 2, SvelteKit, and Rust.
 
 Supports **Claude Code**, **Codex CLI**, and **Gemini CLI** out of the box — via native hooks or process scanning.
@@ -10,7 +20,7 @@ Supports **Claude Code**, **Codex CLI**, and **Gemini CLI** out of the box — v
 - **Popup dashboard** — click the tray icon to see all agents with status, message, and focus button
 - **Terminal focus** — jump directly to the terminal running a specific agent
 - **Native hook integration** — installs lightweight hooks into Claude Code, Codex CLI, and Gemini CLI for instant status updates
-- **Process scanning** — automatically detects running CLI instances via `/proc` (Linux) as a fallback
+- **Process scanning** — automatically detects running CLI instances (Linux, macOS, Windows) as a fallback
 - **Source-aware dedup** — merges hook-reported and process-scanned agents without duplicates
 - **File-based status** — agents report status via simple JSON files in `~/.agent-monitor/`
 - **Global hotkey** — `Ctrl+Shift+A` toggles the popup from anywhere
@@ -47,7 +57,7 @@ Hooks are installed into each CLI's settings file and fire on events like sessio
 ### 2. Process scanning (fallback)
 
 ```
-watcher.rs scans /proc for running CLI processes
+scanner/ detects running CLI processes (Linux /proc, macOS, Windows)
   → merges with hook-reported agents (dedup by session)
   → emits "agents-updated" Tauri event
 ```
@@ -148,11 +158,14 @@ cargo tauri build            # Production build
 │   └── lib/utils.ts          # Utility functions
 ├── src-tauri/
 │   ├── src/main.rs           # App entry, tray setup, watcher spawn
-│   ├── src/watcher.rs        # File watcher + /proc scanner (strategy pattern)
+│   ├── src/watcher.rs        # File watcher, event loop, orphan cleanup
+│   ├── src/scanner/          # Cross-platform process scanner (Linux, macOS, Windows)
+│   ├── src/heuristics.rs     # CPU/state heuristics for status classification
+│   ├── src/notifier.rs       # Desktop notification dispatch
 │   ├── src/tray.rs           # Tray icon + popup window management
 │   ├── src/focus.rs          # Terminal focus command router
 │   ├── src/focusers/         # Platform-specific focus handlers
-│   ├── icons/                # Tray state icons (22x22 PNGs)
+│   ├── icons/                # App and tray icons
 │   └── Cargo.toml            # Rust dependencies
 ├── CLAUDE.md                 # Claude Code project instructions
 └── package.json              # Frontend dependencies
@@ -160,9 +173,9 @@ cargo tauri build            # Production build
 
 ## Tech Stack
 
-- **Backend:** Rust + Tauri 2.x (tray-icon, shell, process, global-shortcut plugins)
+- **Backend:** Rust + Tauri 2.x (tray-icon, shell, process, global-shortcut, notification, window-state plugins)
 - **Frontend:** SvelteKit + Svelte 5 (runes) + Tailwind CSS v4
-- **File watching:** notify crate v6 (inotify on Linux)
+- **File watching:** notify crate v8
 - **Icons:** Lucide Svelte
 
 ## Releasing
