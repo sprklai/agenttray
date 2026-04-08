@@ -15,15 +15,11 @@ Real-time tray notifications for Claude, Codex, and Gemini — surfaces agent pa
 
 ## Download
 
-| Platform | Format | Link |
-|----------|--------|------|
-| Linux | `.deb` (Debian/Ubuntu) | [Download](https://github.com/sprklai/agenttray/releases/latest) |
-| Linux | `.AppImage` (portable) | [Download](https://github.com/sprklai/agenttray/releases/latest) |
-| Linux | `.rpm` (Fedora/RHEL) | [Download](https://github.com/sprklai/agenttray/releases/latest) |
-| macOS | `.dmg` (Apple Silicon) | [Download](https://github.com/sprklai/agenttray/releases/latest) |
-| macOS | `.dmg` (Intel) | [Download](https://github.com/sprklai/agenttray/releases/latest) |
-| Windows | `.msi` installer | [Download](https://github.com/sprklai/agenttray/releases/latest) |
-| Windows | `.exe` (NSIS) | [Download](https://github.com/sprklai/agenttray/releases/latest) |
+[![Linux](https://img.shields.io/badge/Linux-.deb%20%7C%20.AppImage%20%7C%20.rpm-orange?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/sprklai/agenttray/releases/latest)
+[![macOS](https://img.shields.io/badge/macOS-.dmg%20(arm64%20%2B%20x64)-black?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/sprklai/agenttray/releases/latest)
+[![Windows](https://img.shields.io/badge/Windows-.msi%20%7C%20.exe-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/sprklai/agenttray/releases/latest)
+
+> Pick the right format for your distro/arch from the [releases page](https://github.com/sprklai/agenttray/releases/latest).
 
 ---
 
