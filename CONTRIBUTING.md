@@ -29,6 +29,8 @@ See `focusers/kitty.rs` or `focusers/tmux.rs` as templates. Issue: [#12 Ghostty]
 
 All open `help wanted` and `good first issue` issues: [browse by label](https://github.com/sprklai/agenttray/issues?q=is%3Aopen+label%3A%22help+wanted%22%2C%22good+first+issue%22).
 
+To claim an issue, comment `/assign` on it — you'll be automatically assigned without needing write access.
+
 ---
 
 ## Getting Started

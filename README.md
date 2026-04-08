@@ -214,7 +214,7 @@ Contributions welcome — especially in two areas:
 
 **Add terminal focus support** — Ghostty, Wezterm, Zellij, Alacritty. Each focuser is a small Rust impl of one trait in `src-tauri/src/focusers/`. See [#12](https://github.com/sprklai/agenttray/issues/12).
 
-Browse all [`help wanted`](https://github.com/sprklai/agenttray/issues?q=is%3Aopen+label%3A%22help+wanted%22) and [`good first issue`](https://github.com/sprklai/agenttray/issues?q=is%3Aopen+label%3A%22good+first+issue%22) issues. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and architecture details.
+Browse all [`help wanted`](https://github.com/sprklai/agenttray/issues?q=is%3Aopen+label%3A%22help+wanted%22) and [`good first issue`](https://github.com/sprklai/agenttray/issues?q=is%3Aopen+label%3A%22good+first+issue%22) issues. Comment `/assign` on any issue to self-assign it. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and architecture details.
 
 ## Star History
 

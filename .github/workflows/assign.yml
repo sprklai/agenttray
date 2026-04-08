@@ -1,0 +1,19 @@
+name: Self Assign Issue
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  assign:
+    if: github.event.comment.body == '/assign'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - run: gh issue edit "$ISSUE_NUMBER" --add-assignee "$ASSIGNEE"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ASSIGNEE: ${{ github.event.comment.user.login }}
