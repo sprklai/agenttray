@@ -440,7 +440,7 @@ map_codex() {
       write_status "working" "Tool completed" "$EVENT" "$MATCHER"
       ;;
     Stop)
-      write_status "idle" "Finished responding" "$EVENT"
+      write_status "needs-input" "Waiting for input" "$EVENT"
       ;;
     UserPromptSubmit)
       write_status "working" "Processing prompt" "$EVENT"

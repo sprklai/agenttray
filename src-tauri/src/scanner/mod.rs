@@ -170,6 +170,19 @@ impl Scanner {
                 }
             }
 
+            // For tmux panes: read the pane title set by the inner process via OSC
+            // escape sequences (e.g. Codex sets "Waiting...", "Thinking...", etc.).
+            // This overrides any outer terminal title from xdotool, which reflects
+            // tmux's own formatted title when set-titles is off — not the process title.
+            #[cfg(not(target_os = "windows"))]
+            if let Some(ref t) = terminal {
+                if t.kind == "tmux" && !t.focus_id.is_empty() {
+                    if let Some(pane_title) = read_tmux_pane_title(&t.focus_id) {
+                        p.window_title = Some(pane_title);
+                    }
+                }
+            }
+
             // Count direct child processes, excluding known background services
             // (MCP servers, worker services) that are always present.
             let child_count = count_children(p.pid, strategy.excluded_substrings());
@@ -500,6 +513,18 @@ fn detect_multiplexer_focus(pid: u32) -> Option<(String, String, String)> {
         }
     }
     None
+}
+
+/// Read the title of a tmux pane as set by the inner process via OSC escape
+/// sequences. Returns None if tmux is unavailable or the pane has no title.
+#[cfg(not(target_os = "windows"))]
+fn read_tmux_pane_title(pane_id: &str) -> Option<String> {
+    let output = std::process::Command::new("tmux")
+        .args(["display-message", "-t", pane_id, "-p", "#{pane_title}"])
+        .output()
+        .ok()?;
+    let title = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if title.is_empty() { None } else { Some(title) }
 }
 
 #[cfg(test)]
