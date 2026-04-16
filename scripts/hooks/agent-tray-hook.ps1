@@ -196,7 +196,7 @@ function Map-Codex {
         'SessionStart'     { Write-Status -Status 'working' -Message 'Session started' -HookEvent $Event }
         'PreToolUse'       { Write-Status -Status 'working' -Message 'Running tool...' -HookEvent $Event -HookMatcher $Matcher }
         'PostToolUse'      { Write-Status -Status 'working' -Message 'Tool completed' -HookEvent $Event -HookMatcher $Matcher }
-        'Stop'             { Write-Status -Status 'idle' -Message 'Finished responding' -HookEvent $Event }
+        'Stop'             { Write-Status -Status 'needs-input' -Message 'Waiting for input' -HookEvent $Event }
         'UserPromptSubmit' { Write-Status -Status 'working' -Message 'Processing prompt' -HookEvent $Event }
         'SessionEnd'       { Remove-StatusFile }
     }

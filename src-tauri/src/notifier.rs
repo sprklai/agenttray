@@ -1,7 +1,13 @@
+use std::collections::{HashMap, HashSet};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
+
 use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 
 use crate::watcher::AgentStatus;
+
+const NEEDS_INPUT_REMINDER_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Events that can trigger a notification.
 #[derive(Debug, Clone)]
@@ -9,6 +15,10 @@ pub enum AgentEvent {
     NeedsInput {
         agent_name: String,
         /// Hook-provided reason: "permission_prompt", "idle_prompt", "elicitation_dialog", etc.
+        reason: Option<String>,
+    },
+    NeedsInputReminder {
+        agent_name: String,
         reason: Option<String>,
     },
 }
@@ -27,6 +37,11 @@ impl Notifier for SystemBeepNotifier {
             AgentEvent::NeedsInput { agent_name, reason } => {
                 let reason_str = reason.as_deref().unwrap_or("unknown");
                 log::info!("Agent '{}' needs input ({}) — playing alert", agent_name, reason_str);
+                play_system_beep();
+            }
+            AgentEvent::NeedsInputReminder { agent_name, reason } => {
+                let reason_str = reason.as_deref().unwrap_or("unknown");
+                log::info!("Agent '{}' still needs input ({}) — playing reminder", agent_name, reason_str);
                 play_system_beep();
             }
         }
@@ -59,6 +74,7 @@ impl Notifier for DesktopNotifier {
                     log::warn!("Desktop notification failed: {}", e);
                 }
             }
+            AgentEvent::NeedsInputReminder { .. } => {}
         }
     }
 }
@@ -95,6 +111,73 @@ impl Notifier for CompositeNotifier {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+struct ReminderState {
+    entered_at: Instant,
+    last_reminder_at: Option<Instant>,
+}
+
+#[derive(Default)]
+struct NeedsInputReminderTracker {
+    active: HashMap<String, ReminderState>,
+}
+
+impl NeedsInputReminderTracker {
+    fn collect_events(&mut self, old: &[AgentStatus], new: &[AgentStatus], now: Instant) -> Vec<AgentEvent> {
+        let active_ids: HashSet<String> = new.iter()
+            .filter(|agent| agent.status == "needs-input")
+            .map(|agent| agent.id.clone())
+            .collect();
+        self.active.retain(|id, _| active_ids.contains(id));
+
+        let mut events = Vec::new();
+
+        for agent in new.iter().filter(|agent| agent.status == "needs-input") {
+            let was_needs_input = old
+                .iter()
+                .find(|old_agent| old_agent.id == agent.id)
+                .map(|old_agent| old_agent.status == "needs-input")
+                .unwrap_or(false);
+
+            let entry = self.active.entry(agent.id.clone()).or_insert(ReminderState {
+                entered_at: now,
+                last_reminder_at: None,
+            });
+
+            if !was_needs_input {
+                *entry = ReminderState {
+                    entered_at: now,
+                    last_reminder_at: None,
+                };
+                events.push(AgentEvent::NeedsInput {
+                    agent_name: agent.name.clone(),
+                    reason: agent.hook_matcher.clone(),
+                });
+                continue;
+            }
+
+            let has_waited_long_enough = now.duration_since(entry.entered_at) >= NEEDS_INPUT_REMINDER_INTERVAL;
+            let reminder_due = entry.last_reminder_at
+                .map(|last| now.duration_since(last) >= NEEDS_INPUT_REMINDER_INTERVAL)
+                .unwrap_or(true);
+
+            if has_waited_long_enough && reminder_due {
+                entry.last_reminder_at = Some(now);
+                events.push(AgentEvent::NeedsInputReminder {
+                    agent_name: agent.name.clone(),
+                    reason: agent.hook_matcher.clone(),
+                });
+            }
+        }
+
+        events
+    }
+}
+
+static REMINDER_TRACKER: LazyLock<Mutex<NeedsInputReminderTracker>> = LazyLock::new(|| {
+    Mutex::new(NeedsInputReminderTracker::default())
+});
 
 fn play_system_beep() {
     std::thread::spawn(|| {
@@ -164,25 +247,28 @@ fn platform_beep() -> Result<(), String> {
     Ok(())
 }
 
-/// Compare old and new agent lists; fire notifications for transitions to needs-input.
-/// Uses `id` for identity matching so title/name changes don't retrigger alerts.
+/// Compare old and new agent lists; fire immediate notifications for
+/// transitions to needs-input, then periodic reminder beeps while the
+/// waiting state persists. Uses `id` for identity matching so title/name
+/// changes don't retrigger alerts.
 pub fn detect_and_notify(old: &[AgentStatus], new: &[AgentStatus], notifier: &dyn Notifier, app: Option<&AppHandle>) {
-    for agent in new {
-        if agent.status != "needs-input" {
-            continue;
-        }
-        let was_needs_input = old
-            .iter()
-            .find(|a| a.id == agent.id)
-            .map(|a| a.status == "needs-input")
-            .unwrap_or(false);
+    let mut tracker = REMINDER_TRACKER.lock().unwrap_or_else(|e| {
+        log::warn!("REMINDER_TRACKER mutex poisoned, recovering");
+        e.into_inner()
+    });
+    detect_and_notify_with_tracker(old, new, notifier, app, &mut tracker, Instant::now());
+}
 
-        if !was_needs_input {
-            notifier.notify(&AgentEvent::NeedsInput {
-                agent_name: agent.name.clone(),
-                reason: agent.hook_matcher.clone(),
-            }, app);
-        }
+fn detect_and_notify_with_tracker(
+    old: &[AgentStatus],
+    new: &[AgentStatus],
+    notifier: &dyn Notifier,
+    app: Option<&AppHandle>,
+    tracker: &mut NeedsInputReminderTracker,
+    now: Instant,
+) {
+    for event in tracker.collect_events(old, new, now) {
+        notifier.notify(&event, app);
     }
 }
 
@@ -219,40 +305,45 @@ mod tests {
     #[test]
     fn no_notification_when_already_needs_input() {
         let n = CountingNotifier(AtomicUsize::new(0));
+        let mut tracker = NeedsInputReminderTracker::default();
         let old = vec![agent("a", "needs-input")];
         let new = vec![agent("a", "needs-input")];
-        detect_and_notify(&old, &new, &n, None);
+        detect_and_notify_with_tracker(&old, &new, &n, None, &mut tracker, Instant::now());
         assert_eq!(n.0.load(Ordering::Relaxed), 0);
     }
 
     #[test]
     fn notification_on_transition_to_needs_input() {
         let n = CountingNotifier(AtomicUsize::new(0));
+        let mut tracker = NeedsInputReminderTracker::default();
         let old = vec![agent("a", "working")];
         let new = vec![agent("a", "needs-input")];
-        detect_and_notify(&old, &new, &n, None);
+        detect_and_notify_with_tracker(&old, &new, &n, None, &mut tracker, Instant::now());
         assert_eq!(n.0.load(Ordering::Relaxed), 1);
     }
 
     #[test]
     fn notification_for_new_agent_as_needs_input() {
         let n = CountingNotifier(AtomicUsize::new(0));
-        detect_and_notify(&[], &[agent("a", "needs-input")], &n, None);
+        let mut tracker = NeedsInputReminderTracker::default();
+        detect_and_notify_with_tracker(&[], &[agent("a", "needs-input")], &n, None, &mut tracker, Instant::now());
         assert_eq!(n.0.load(Ordering::Relaxed), 1);
     }
 
     #[test]
     fn no_notification_for_non_needs_input() {
         let n = CountingNotifier(AtomicUsize::new(0));
+        let mut tracker = NeedsInputReminderTracker::default();
         let old = vec![agent("a", "idle")];
         let new = vec![agent("a", "working")];
-        detect_and_notify(&old, &new, &n, None);
+        detect_and_notify_with_tracker(&old, &new, &n, None, &mut tracker, Instant::now());
         assert_eq!(n.0.load(Ordering::Relaxed), 0);
     }
 
     #[test]
     fn multiple_agents_only_transitioned_ones_notify() {
         let n = CountingNotifier(AtomicUsize::new(0));
+        let mut tracker = NeedsInputReminderTracker::default();
         let old = vec![
             agent("a", "working"),
             agent("b", "needs-input"),
@@ -263,7 +354,51 @@ mod tests {
             agent("b", "needs-input"),
             agent("c", "needs-input"),
         ];
-        detect_and_notify(&old, &new, &n, None);
+        detect_and_notify_with_tracker(&old, &new, &n, None, &mut tracker, Instant::now());
+        assert_eq!(n.0.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn reminder_fires_after_ten_seconds() {
+        let n = CountingNotifier(AtomicUsize::new(0));
+        let mut tracker = NeedsInputReminderTracker::default();
+        let start = Instant::now();
+        let waiting = vec![agent("a", "needs-input")];
+
+        detect_and_notify_with_tracker(&[], &waiting, &n, None, &mut tracker, start);
+        detect_and_notify_with_tracker(&waiting, &waiting, &n, None, &mut tracker, start + Duration::from_secs(10));
+
+        assert_eq!(n.0.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn reminder_repeats_every_ten_seconds() {
+        let n = CountingNotifier(AtomicUsize::new(0));
+        let mut tracker = NeedsInputReminderTracker::default();
+        let start = Instant::now();
+        let waiting = vec![agent("a", "needs-input")];
+
+        detect_and_notify_with_tracker(&[], &waiting, &n, None, &mut tracker, start);
+        detect_and_notify_with_tracker(&waiting, &waiting, &n, None, &mut tracker, start + Duration::from_secs(9));
+        detect_and_notify_with_tracker(&waiting, &waiting, &n, None, &mut tracker, start + Duration::from_secs(10));
+        detect_and_notify_with_tracker(&waiting, &waiting, &n, None, &mut tracker, start + Duration::from_secs(19));
+        detect_and_notify_with_tracker(&waiting, &waiting, &n, None, &mut tracker, start + Duration::from_secs(20));
+
+        assert_eq!(n.0.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn reminder_state_clears_when_agent_leaves_waiting() {
+        let n = CountingNotifier(AtomicUsize::new(0));
+        let mut tracker = NeedsInputReminderTracker::default();
+        let start = Instant::now();
+        let waiting = vec![agent("a", "needs-input")];
+        let working = vec![agent("a", "working")];
+
+        detect_and_notify_with_tracker(&[], &waiting, &n, None, &mut tracker, start);
+        detect_and_notify_with_tracker(&waiting, &working, &n, None, &mut tracker, start + Duration::from_secs(5));
+        detect_and_notify_with_tracker(&working, &waiting, &n, None, &mut tracker, start + Duration::from_secs(6));
+
         assert_eq!(n.0.load(Ordering::Relaxed), 2);
     }
 }
